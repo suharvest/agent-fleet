@@ -1,0 +1,49 @@
+{
+  "_meta": {
+    "description": "Example Fleet device inventory. Copy to devices.json and fill in your own hosts. Do not commit real passwords.",
+    "schema": {
+      "devices": {
+        "<name>": {
+          "host": "IP address or hostname",
+          "port": "optional SSH port, defaults to 22",
+          "user": "SSH username",
+          "password": "optional SSH password; leave empty to use SSH keys",
+          "owner": "personal or company",
+          "tags": ["linux", "arm64", "edge"],
+          "description": "human-readable description",
+          "gateway": "optional Windows gateway device name for WSL2 devices",
+          "wsl_distro": "optional WSL distro name"
+        }
+      }
+    }
+  },
+  "devices": {
+    "radxa": {
+      "host": "100.77.150.16",
+      "user": "radxa",
+      "password": "",
+      "owner": "personal",
+      "tags": ["linux", "arm64", "rk3588", "edge"],
+      "description": "Example Linux edge device"
+    },
+    "home-win": {
+      "host": "100.73.210.80",
+      "user": "harve",
+      "password": "",
+      "owner": "personal",
+      "tags": ["windows", "x86_64", "desktop"],
+      "description": "Example native Windows host; use fleet exec for PowerShell/cmd"
+    },
+    "wsl2-local": {
+      "host": "100.73.210.80",
+      "port": 22222,
+      "user": "harve",
+      "password": "",
+      "owner": "personal",
+      "tags": ["wsl2", "linux", "x86_64", "dev-host"],
+      "description": "Example WSL2 device on the Windows host; use fleet run for persistent PTY",
+      "gateway": "home-win",
+      "wsl_distro": "Ubuntu"
+    }
+  }
+}
