@@ -1,4 +1,4 @@
-# Unified Fleet + PTY Router Architecture
+# AgentFleet Architecture
 
 ## Core Decision
 
@@ -14,9 +14,9 @@ Agent shell
 ```
 
 Fleet remains the established device runtime: inventory, status, bootstrap,
-transfer, WSL recovery, detached jobs, and human SSH/tmux entry. The PTY router
-adds a different transport for local Agent shell routing: exact-byte writes to a
-persistent PTY. Final form: one Fleet-compatible CLI containing all modes.
+transfer, WSL recovery, detached jobs, and human SSH/tmux entry. AgentFleet adds
+a different transport for local Agent shell routing: exact-byte writes to a
+persistent PTY, all behind one Fleet-compatible CLI.
 
 ## Rust Components
 

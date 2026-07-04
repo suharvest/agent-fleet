@@ -46,6 +46,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-fleet"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "md5 0.7.0",
+ "russh",
+ "serde_json",
+ "ssh2",
+ "tokio",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1213,18 +1225,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "pty_router"
-version = "0.1.0"
-dependencies = [
- "base64",
- "md5 0.7.0",
- "russh",
- "serde_json",
- "ssh2",
- "tokio",
 ]
 
 [[package]]

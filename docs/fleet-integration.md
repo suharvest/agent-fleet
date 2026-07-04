@@ -78,7 +78,7 @@ Do not assume every device has a clean OpenSSH alias.
 
 ## Preventing Swallowed Results
 
-Previous Fleet usage sometimes lost or hid parsed results. Remote PTY Router
+Previous Fleet usage sometimes lost or hid parsed results. AgentFleet
 must treat this as a design constraint, not an incidental bug.
 
 Required defenses:

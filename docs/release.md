@@ -1,6 +1,6 @@
-# Release And Distribution
+# AgentFleet Release And Distribution
 
-Fleet PTY Router is distributed as prebuilt release archives plus a small
+AgentFleet is distributed as prebuilt release archives plus a small
 install script. Normal users should not need Rust installed locally.
 
 ## User Install From Release
@@ -8,26 +8,26 @@ install script. Normal users should not need Rust installed locally.
 Each `v*` tag publishes platform archives:
 
 ```text
-pty-router-linux-x86_64.tar.gz
-pty-router-linux-aarch64.tar.gz
-pty-router-macos-x86_64.tar.gz
-pty-router-macos-aarch64.tar.gz
-pty-router-windows-x86_64.zip
+agent-fleet-linux-x86_64.tar.gz
+agent-fleet-linux-aarch64.tar.gz
+agent-fleet-macos-x86_64.tar.gz
+agent-fleet-macos-aarch64.tar.gz
+agent-fleet-windows-x86_64.zip
 ```
 
 macOS/Linux:
 
 ```bash
-tar -xzf pty-router-<platform>.tar.gz
-cd pty-router-<platform>
+tar -xzf agent-fleet-<platform>.tar.gz
+cd agent-fleet-<platform>
 ./scripts/install.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-Expand-Archive .\pty-router-windows-x86_64.zip
-cd .\pty-router-windows-x86_64\pty-router-windows-x86_64
+Expand-Archive .\agent-fleet-windows-x86_64.zip
+cd .\agent-fleet-windows-x86_64\agent-fleet-windows-x86_64
 .\scripts\install.ps1
 ```
 
@@ -46,7 +46,7 @@ macOS/Linux:
 
 ```bash
 git clone <repo-url>
-cd pty_router
+cd agent-fleet
 ./scripts/install.sh
 ```
 
@@ -54,7 +54,7 @@ Windows PowerShell:
 
 ```powershell
 git clone <repo-url>
-cd pty_router
+cd agent-fleet
 .\scripts\install.ps1
 ```
 

@@ -1,7 +1,6 @@
 # Getting Started
 
-This guide is for a fresh local setup after cloning or downloading Fleet PTY
-Router.
+This guide is for a fresh local setup after cloning or downloading AgentFleet.
 
 ## Prerequisites
 

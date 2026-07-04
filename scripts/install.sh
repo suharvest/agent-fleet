@@ -19,7 +19,7 @@ fi
 
 cat <<'EOF'
 
-Fleet PTY Router installed.
+AgentFleet installed.
 Open a new shell, then run:
 
   fleet doctor

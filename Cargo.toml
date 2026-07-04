@@ -1,8 +1,8 @@
 [package]
-name = "pty_router"
+name = "agent-fleet"
 version = "0.1.0"
 edition = "2021"
-description = "Remote PTY router for local coding agents"
+description = "One agent login that works across every device in your fleet"
 license = "MIT"
 default-run = "rpty"
 

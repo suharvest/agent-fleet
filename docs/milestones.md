@@ -3,7 +3,7 @@
 ## M0: Repository Setup
 
 - Create Rust crate.
-- Document final unified Fleet + PTY Router direction.
+- Document final AgentFleet direction.
 - Add CLI skeleton.
 - Add structured logging.
 - Add config/state path helpers.

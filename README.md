@@ -1,18 +1,18 @@
-# Fleet PTY Router
+# AgentFleet
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#cross-platform)
 [![Agents](https://img.shields.io/badge/agents-Codex%20%7C%20Claude%20Code%20%7C%20OpenCode-7c3aed)](#agent-workflow)
 [![License](https://img.shields.io/badge/license-MIT-green)](#license)
 
-**One agent session. Work across every device in your fleet.**
+**One login. Work across every device with your coding agent.**
 
-Fleet PTY Router lets AI coding agents such as **Codex**, **Claude Code**, and
+AgentFleet lets AI coding agents such as **Codex**, **Claude Code**, and
 **OpenCode** move between real devices without losing shell state. It keeps the
 existing Fleet CLI for inventory, SSH, transfer, jobs, WSL, and bootstrap, then
 adds persistent remote `tmux` sessions for stateful agent work.
 
-![Fleet PTY Router demo: one agent session switching across devices](media/demo.gif)
+![AgentFleet demo: one agent session switching across devices](media/demo.gif)
 
 ```bash
 fleet doctor --fix --write-shell-profile
@@ -56,7 +56,7 @@ Plain SSH is brittle for agents:
 - two agents can accidentally type into the same remote shell.
 - long-running foreground work is hard to resume or inspect.
 
-Fleet PTY Router gives each agent its own session and one remote `tmux` shell
+AgentFleet gives each agent its own session and one remote `tmux` shell
 per device. The agent can switch devices with `fleet use <device>` or run a
 single command elsewhere with `fleet run --host <device> -- <cmd>`.
 
@@ -86,8 +86,8 @@ macOS/Linux:
 
 ```bash
 # Download the matching archive from GitHub Releases, then:
-tar -xzf pty-router-<platform>.tar.gz
-cd pty-router-<platform>
+tar -xzf agent-fleet-<platform>.tar.gz
+cd agent-fleet-<platform>
 ./scripts/install.sh
 ```
 
@@ -95,8 +95,8 @@ Windows PowerShell:
 
 ```powershell
 # Download the matching .zip from GitHub Releases, then:
-Expand-Archive .\pty-router-windows-x86_64.zip
-cd .\pty-router-windows-x86_64\pty-router-windows-x86_64
+Expand-Archive .\agent-fleet-windows-x86_64.zip
+cd .\agent-fleet-windows-x86_64\agent-fleet-windows-x86_64
 .\scripts\install.ps1
 ```
 
@@ -365,7 +365,7 @@ Useful docs:
 
 ## Acknowledgements
 
-Fleet PTY Router builds on the existing Fleet device workflow and the proven
+AgentFleet builds on the existing Fleet device workflow and the proven
 `tmux` model for durable terminal sessions. Related projects that informed the
 README and positioning include `tmate`, `sshx`, DevPod, and Coder.
 

@@ -1,18 +1,17 @@
-# Product Direction: Unified Fleet + PTY Router
+# Product Direction: AgentFleet
 
 ## Final Shape
 
-The final product should be one local tool, not two parallel tools.
+AgentFleet should be one local tool, not two parallel tools.
 
 It should combine:
 
 - Fleet's existing device inventory, auth, status, bootstrap, transfer, WSL,
   detached jobs, and human remote workflows;
-- the new Remote PTY Router capability for local Coding Agents.
+- persistent Remote PTY routing for local Coding Agents.
 
-Working name during development can remain `rpty`, but the long-term CLI should
-either become the next `fleet` or expose a compatibility alias so existing
-workflows keep working.
+The long-term CLI is `fleet`, with `rpty` kept as a compatibility entry point so
+existing development workflows keep working.
 
 ## Why Unified
 

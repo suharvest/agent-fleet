@@ -1,17 +1,18 @@
 # Agent Instructions
 
-This repository is building a unified Fleet + PTY Router tool.
+This repository builds AgentFleet: one Fleet-compatible CLI for local edge
+devices and persistent remote PTY sessions.
 
 ## Product Direction
 
-The final product should be one Fleet-compatible CLI, not two separate tools.
-Existing Fleet behavior is the device-runtime contract. The new PTY router is an
-additional execution mode for local Coding Agents.
+AgentFleet should be one Fleet-compatible CLI, not two separate tools. Existing
+Fleet behavior is the device-runtime contract. The PTY router is an additional
+execution mode for local Coding Agents.
 
 The binary supports both `fleet` and `rpty` invocation names. Prefer `fleet` in
 docs and user-facing examples.
 
-Agent-facing usage guidance lives in `skills/fleet-pty-router/SKILL.md`.
+Agent-facing usage guidance lives in `skills/agentfleet/SKILL.md`.
 Keep it aligned with this file whenever command behavior changes.
 
 Final command surface should support:

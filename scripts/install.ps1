@@ -17,7 +17,7 @@ if ($env:RPTY_FLEET_BIN) {
 & $FleetBin doctor --fix --write-shell-profile
 
 Write-Host ""
-Write-Host "Fleet PTY Router installed."
+Write-Host "AgentFleet installed."
 Write-Host "Open a new PowerShell window, then run:"
 Write-Host ""
 Write-Host "  fleet doctor"

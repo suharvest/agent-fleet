@@ -480,7 +480,7 @@ fn install_agent_wrapper(dir: &std::path::Path, agent: &str) -> Result<(), Strin
         .map_err(|err| format!("failed to create shim dir {}: {err}", dir.display()))?;
     let shim = command_shim_path(dir, agent);
     if let Ok(existing) = std::fs::read_to_string(&shim) {
-        if !existing.contains("fleet-pty-router agent shim") {
+        if !is_agentfleet_agent_shim(&existing) {
             return Err(format!(
                 "{} already exists and is not a Fleet agent shim; refusing to overwrite",
                 shim.display()
@@ -533,7 +533,7 @@ fn command_shim_path(dir: &Path, name: &str) -> PathBuf {
 fn agent_wrapper_script(agent: &str) -> String {
     format!(
         r#"#!/bin/sh
-# fleet-pty-router agent shim
+# AgentFleet agent shim
 set -eu
 
 self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -574,7 +574,7 @@ exec "$real_agent" "$@"
 fn agent_wrapper_script(agent: &str) -> String {
     format!(
         r#"@echo off
-rem fleet-pty-router agent shim
+rem AgentFleet agent shim
 setlocal EnableExtensions
 set "SELF_DIR=%~dp0"
 set "SELF_DIR=%SELF_DIR:~0,-1%"
@@ -629,7 +629,7 @@ fn install_link(dir: &std::path::Path, name: &str, exe: &std::path::Path) -> Res
 
     if cfg!(windows) {
         if let Ok(existing) = std::fs::read_to_string(&shim) {
-            if !existing.contains("fleet-pty-router command shim") {
+            if !is_agentfleet_command_shim(&existing) {
                 return Err(format!(
                     "{} already exists and is not a Fleet command shim; refusing to overwrite",
                     shim.display()
@@ -673,7 +673,7 @@ fn windows_command_wrapper_script(name: &str, exe: &Path) -> String {
     if name == "bash" {
         format!(
             r#"@echo off
-rem fleet-pty-router command shim
+rem AgentFleet command shim
 set "RPTY_ARGV0=bash"
 "{exe}" %*
 "#
@@ -681,7 +681,7 @@ set "RPTY_ARGV0=bash"
     } else {
         format!(
             r#"@echo off
-rem fleet-pty-router command shim
+rem AgentFleet command shim
 "{exe}" %*
 "#
         )
@@ -963,7 +963,7 @@ fn ensure_line_in_file(path: &Path, line: &str) -> Result<(), String> {
     if !existing.is_empty() && !existing.ends_with('\n') {
         writeln!(file).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
     }
-    writeln!(file, "\n# Fleet PTY Router\n{line}")
+    writeln!(file, "\n# AgentFleet\n{line}")
         .map_err(|err| format!("failed to write {}: {err}", path.display()))
 }
 
@@ -996,8 +996,16 @@ fn same_path(left: &Path, right: &Path) -> bool {
 
 fn agent_shim_installed(path: &Path) -> bool {
     std::fs::read_to_string(path)
-        .map(|content| content.contains("fleet-pty-router agent shim"))
+        .map(|content| content.contains("AgentFleet agent shim"))
         .unwrap_or(false)
+}
+
+fn is_agentfleet_agent_shim(content: &str) -> bool {
+    content.contains("AgentFleet agent shim") || content.contains("fleet-pty-router agent shim")
+}
+
+fn is_agentfleet_command_shim(content: &str) -> bool {
+    content.contains("AgentFleet command shim") || content.contains("fleet-pty-router command shim")
 }
 
 fn print_first_nonempty_line(label: &str, value: &str) {
@@ -1223,6 +1231,20 @@ mod tests {
         assert!(super::validate_agent_name("opencode").is_ok());
         assert!(super::validate_agent_name("bad/name").is_err());
         assert!(super::validate_agent_name("").is_err());
+    }
+
+    #[test]
+    fn old_agent_shim_marker_is_upgradable() {
+        assert!(super::is_agentfleet_agent_shim(
+            "# fleet-pty-router agent shim"
+        ));
+        assert!(super::is_agentfleet_agent_shim("# AgentFleet agent shim"));
+        assert!(super::is_agentfleet_command_shim(
+            "rem fleet-pty-router command shim"
+        ));
+        assert!(super::is_agentfleet_command_shim(
+            "rem AgentFleet command shim"
+        ));
     }
 
     #[test]

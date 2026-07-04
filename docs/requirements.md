@@ -1,8 +1,8 @@
-# Remote PTY Router Requirements
+# AgentFleet Requirements
 
 ## Goal
 
-The final product is a unified Fleet + Remote PTY Router tool. It keeps Fleet's
+AgentFleet is a unified Fleet + Remote PTY routing tool. It keeps Fleet's
 existing device-management behavior and adds a local terminal routing layer for
 Coding Agents such as Codex, Claude Code, Aider, and Gemini CLI.
 

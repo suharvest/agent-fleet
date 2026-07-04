@@ -1,4 +1,4 @@
-# Fleet PTY Router
+# AgentFleet
 
 Use this skill when working with local Fleet devices through this repository's
 unified `fleet` CLI, especially when an Agent needs persistent remote shell
