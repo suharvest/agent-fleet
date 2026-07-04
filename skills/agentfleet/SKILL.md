@@ -24,10 +24,17 @@ Use persistent PTY mode when command state matters:
 
 ```bash
 fleet use <device>
-fleet run -- 'cd /path && source .venv/bin/activate && python script.py'
-fleet run -- 'python another_step.py'
+cd /path
+source .venv/bin/activate
+python script.py
+python another_step.py
 fleet env
 ```
+
+After `fleet use <device>`, prefer ordinary shell commands. The installed bash
+shim routes common Agent shell calls (`bash -lc` / `bash -c`) to the current
+device. Use `fleet run -- <cmd>` only when an explicit wrapper is clearer, and
+use `fleet run --host <device> -- <cmd>` for one command on another device.
 
 Use regular Fleet execution when the command is stateless:
 
@@ -61,7 +68,8 @@ claude
 opencode
 fleet hosts
 fleet use radxa
-fleet run -- 'cd /tmp && pwd'
+cd /tmp
+pwd
 fleet use wsl2-local
 fleet env
 fleet run --host radxa -- 'hostname'

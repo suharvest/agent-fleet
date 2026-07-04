@@ -20,7 +20,7 @@ Final command surface should support:
 ```bash
 fleet shell
 fleet use <device>
-fleet run -- <cmd>
+<ordinary shell commands>
 fleet doctor --fix
 codex
 claude
@@ -112,7 +112,7 @@ claude
 opencode
 fleet hosts
 fleet use <device>
-fleet run -- 'pwd'
+pwd
 fleet run --host <other-device> -- 'hostname'
 ```
 
@@ -148,9 +148,12 @@ payloads.
 
 Agents should choose commands using this rule:
 
-- Use `fleet run` or bash shim when cwd/env/venv/shell state should persist.
 - Use `fleet use <device>` inside the Agent to change the current bash-shim
   target.
+- Use ordinary shell commands after `fleet use <device>` when
+  cwd/env/venv/shell state should persist.
+- Use `fleet run -- <cmd>` only when an explicit, scriptable wrapper is clearer
+  than relying on the bash shim.
 - Use `fleet run --host <device> -- <cmd>` for one command on another device
   without changing the Agent's current target.
 - Use `fleet env` before assuming where the current remote shell is.

@@ -20,9 +20,10 @@ codex
 
 fleet hosts
 fleet use radxa
-fleet run -- 'cd /tmp && export TARGET=radxa'
+cd /tmp
+export TARGET=radxa
 fleet use wsl2-local
-fleet run -- 'hostname'
+hostname
 fleet run --host radxa -- 'echo "$PWD $TARGET"'
 ```
 
@@ -112,7 +113,7 @@ Inside the agent:
 ```bash
 fleet hosts
 fleet use <device>
-fleet run -- 'pwd && hostname'
+pwd && hostname
 fleet env
 ```
 
@@ -164,12 +165,13 @@ Then choose devices from inside the agent:
 ```bash
 fleet hosts
 fleet use radxa
-fleet run -- 'cd /tmp && source .venv/bin/activate'
-fleet run -- 'python run_step.py'
+cd /tmp
+source .venv/bin/activate
+python run_step.py
 
 fleet use wsl2-local
 fleet env
-fleet run -- 'nvidia-smi || true'
+nvidia-smi || true
 
 fleet run --host radxa -- 'echo "one command back on radxa"'
 ```
@@ -177,7 +179,9 @@ fleet run --host radxa -- 'echo "one command back on radxa"'
 Use:
 
 - `fleet use <device>` to change the current target for this agent session.
-- `fleet run -- <cmd>` for stateful commands on the current target.
+- ordinary shell commands for stateful work on the current target.
+- `fleet run -- <cmd>` when an explicit, scriptable wrapper is clearer than the
+  bash shim.
 - `fleet run --host <device> -- <cmd>` for one command on another device.
 - `fleet env` before assuming cwd, shell, virtualenv, Python, or tmux state.
 - `fleet cleanup [device]` when the remote PTY session should be destroyed.
@@ -186,8 +190,8 @@ Use:
 
 | Target | Recommended mode | Notes |
 |---|---|---|
-| Linux / Jetson / Raspberry Pi / cloud | `fleet run` | Requires remote `tmux`; preserves shell state |
-| WSL2 | `fleet run` | Best persistent PTY path for Windows machines |
+| Linux / Jetson / Raspberry Pi / cloud | ordinary shell commands after `fleet use` | Requires remote `tmux`; preserves shell state |
+| WSL2 | ordinary shell commands after `fleet use` | Best persistent PTY path for Windows machines |
 | Native Windows | `fleet exec` | Stateless PowerShell/cmd execution |
 | Long non-interactive jobs | `fleet exec --detach` | Use `fleet jobs`, `fleet log`, `fleet kill-job` |
 | File movement | `fleet push`, `fleet pull`, `fleet transfer`, `fleet work-sync` | Uses existing Fleet transfer behavior |
@@ -204,7 +208,8 @@ Persistent PTY on a Windows host should use its WSL2 Fleet device:
 
 ```bash
 fleet use wsl2-local
-fleet run -- 'cd /tmp && pwd'
+cd /tmp
+pwd
 ```
 
 ## Configuration

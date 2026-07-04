@@ -127,7 +127,8 @@ example:
 
 ```bash
 fleet use wsl2-local
-fleet run -- 'cd /tmp && pwd'
+cd /tmp
+pwd
 ```
 
 Check that Fleet can see devices:
@@ -153,8 +154,10 @@ Verify persistent PTY state:
 
 ```bash
 fleet use <device>
-fleet run -- 'cd /tmp && export RPTY_TEST=ok && pwd'
-fleet run -- 'printf "%s\n" "$PWD $RPTY_TEST"'
+cd /tmp
+export RPTY_TEST=ok
+pwd
+printf "%s\n" "$PWD $RPTY_TEST"
 fleet env
 ```
 
@@ -166,16 +169,18 @@ commands:
 ```bash
 fleet hosts
 fleet use radxa
-fleet run -- 'cd /tmp && pwd'
+cd /tmp
+pwd
 
 fleet use wsl2-local
 fleet env
-fleet run -- 'hostname'
+hostname
 
 fleet run --host radxa -- 'hostname'
 ```
 
 Use `fleet use <device>` to change the current target for that Agent session.
+After that, use ordinary shell commands for stateful work on the current target.
 Use `fleet run --host <device> -- <cmd>` for one command on another device
 without changing the current target.
 
