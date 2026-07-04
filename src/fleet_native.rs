@@ -3921,7 +3921,7 @@ fn push_row(out: &mut String, row: &[String], widths: &[usize]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_list_args, NativeFleet};
+    use super::{local_md5, parse_list_args, NativeFleet};
 
     fn write_fixture(name: &str, content: &str) -> std::path::PathBuf {
         let dir =
@@ -4122,5 +4122,18 @@ mod tests {
         assert!(removed.success);
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains("\"new-box\""));
+    }
+
+    #[test]
+    fn local_md5_reads_file_contents() {
+        let dir = std::env::temp_dir().join(format!("rpty-md5-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("payload.txt");
+        std::fs::write(&path, "windows-controller-sftp-ok").unwrap();
+        assert_eq!(
+            local_md5(&path).unwrap(),
+            "9d92249839466f75fdd779de964507b8"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

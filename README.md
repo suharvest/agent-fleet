@@ -319,7 +319,7 @@ kept for inspection.
 |---|---|---|
 | macOS | Verified | symlink shims, zsh/bash/fish profile support |
 | Linux | Supported | symlink shims, zsh/bash/fish profile support |
-| Windows | Compile-verified | `.cmd` shims, PowerShell profile support |
+| Windows | Verified | `.cmd` shims, PowerShell profile support |
 
 Remote target support:
 
@@ -343,7 +343,8 @@ Verified behavior:
 - timeouts are explicit and do not kill the remote tmux session;
 - locks prevent concurrent writes to the same session/device;
 - direct agent shims work for Codex, Claude Code, and OpenCode;
-- Windows target compile passes with `x86_64-pc-windows-gnu`.
+- Windows controller builds and runs on `home-win`; native `exec`, `push`, and
+  `pull` were verified against both Windows and WSL2/Linux targets.
 
 More details: [docs/validation.md](docs/validation.md).
 
