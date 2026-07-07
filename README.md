@@ -185,6 +185,8 @@ Use:
 - `fleet run --host <device> -- <cmd>` for one command on another device.
 - `fleet env` before assuming cwd, shell, virtualenv, Python, or tmux state.
 - `fleet cleanup [device]` when the remote PTY session should be destroyed.
+- `fleet exec --detach` for long non-interactive jobs; PTY mode is for shell
+  state, not just command duration.
 
 ## Device Modes
 
@@ -317,6 +319,18 @@ Local locks are created before PTY writes:
 If another live process owns the same lock, the command fails before typing into
 the tmux pane. Parser failure is never treated as success; the raw log path is
 kept for inspection.
+
+PTY sessions persist by design so agents can keep cwd, env vars, virtualenvs,
+and interactive shell state across steps. They are destroyed explicitly:
+
+```bash
+fleet cleanup [device]       # current RPTY_SESSION + device
+fleet cleanup --all <device> # all remote AgentFleet tmux sessions on device
+```
+
+`cleanup --all` only kills remote tmux sessions named `rpty-*` and removes
+AgentFleet temp payloads. It does not remove normal Fleet state. Local raw logs
+remain under `~/.rpty/state` for debugging.
 
 ## Cross-Platform
 

@@ -213,3 +213,14 @@ Destroy the current remote PTY session when finished:
 ```bash
 fleet cleanup <device>
 ```
+
+If many old AgentFleet tmux sessions were intentionally left alive on a device,
+clean them explicitly:
+
+```bash
+fleet cleanup --all <device>
+```
+
+AgentFleet does not auto-destroy PTY sessions after each command. Use PTY mode
+for shell state that should survive across Agent steps; use
+`fleet exec --detach` for long non-interactive jobs.

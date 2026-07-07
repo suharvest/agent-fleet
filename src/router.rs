@@ -199,6 +199,19 @@ printf 'tmux_session=%s\n' "__RPTY_TMUX_SESSION__"
         Ok(())
     }
 
+    pub fn cleanup_all(&self, device: &str) -> Result<(), String> {
+        let script = "\
+tmux list-sessions -F '#S' 2>/dev/null | while IFS= read -r session; do
+  case \"$session\" in
+    rpty-*) tmux kill-session -t \"$session\" 2>/dev/null || true ;;
+  esac
+done
+rm -f /tmp/rpty-router/rpty-*.cmd
+";
+        self.exec_shell(device, script, 60)?;
+        Ok(())
+    }
+
     fn exec_shell(&self, device: &str, script: &str, timeout: u64) -> Result<String, String> {
         let captured = self.fleet.exec_capture(
             device,

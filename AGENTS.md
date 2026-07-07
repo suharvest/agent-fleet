@@ -142,7 +142,8 @@ If the lock is held by a live process, choose another `RPTY_SESSION` or wait.
 
 Use `fleet env [device]` to inspect the current remote environment. Use
 `fleet cleanup [device]` to kill the current remote tmux session and remove temp
-payloads.
+payloads. Use `fleet cleanup --all <device>` only when intentionally clearing
+all remote AgentFleet tmux sessions named `rpty-*` on that device.
 
 ## Agent Command Choice
 
@@ -161,7 +162,8 @@ Agents should choose commands using this rule:
 - Use `fleet exec --sudo` for apt/docker/systemd or privileged writes.
 - Use `fleet exec --detach` for long non-interactive jobs.
 - Use `fleet transfer`, `fleet push`, `fleet pull`, or `fleet work-sync` for files.
-- Use `fleet cleanup` when the task's PTY session should be destroyed.
+- Use `fleet cleanup` when the task's PTY session should be destroyed. Do this
+  at task end unless the user wants to resume the remote shell later.
 
 Do not intentionally share one `RPTY_SESSION + device` between multiple Agents
 unless the user explicitly asks for a shared shell.

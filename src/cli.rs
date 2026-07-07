@@ -96,7 +96,7 @@ Usage:
   {bin} install [dir]
   {bin} install-shim [dir]
   {bin} install-agent-shim <agent> [dir]
-  {bin} cleanup [device]
+  {bin} cleanup [--all] [device]
   {bin} attach [device]
   {bin} doctor [--fix] [--write-shell-profile] [device]
   {bin} config [--fleet-py <path>] [--fleet-hub <path>] [--agent <name>]
@@ -706,9 +706,38 @@ fn host_from_optional_arg(args: &[String]) -> Result<String, String> {
 }
 
 fn cleanup(args: &[String]) -> Result<ExitCode, String> {
-    let host = host_from_optional_arg(args)?;
-    Router::new().cleanup(&host)?;
-    println!("Cleaned rpty session for {host}");
+    let mut all = false;
+    let mut host = None;
+
+    for arg in args {
+        match arg.as_str() {
+            "--all" => all = true,
+            value if value.starts_with('-') => {
+                return Err(format!(
+                    "unknown cleanup option: {value}. Usage: fleet cleanup [--all] [device]"
+                ));
+            }
+            value => {
+                if host.replace(value.to_string()).is_some() {
+                    return Err("cleanup accepts at most one device".to_string());
+                }
+            }
+        }
+    }
+
+    let host = match host {
+        Some(host) => host,
+        None => host_from_optional_arg(&[])?,
+    };
+
+    let router = Router::new();
+    if all {
+        router.cleanup_all(&host)?;
+        println!("Cleaned all rpty sessions for {host}");
+    } else {
+        router.cleanup(&host)?;
+        println!("Cleaned rpty session for {host}");
+    }
     Ok(ExitCode::SUCCESS)
 }
 

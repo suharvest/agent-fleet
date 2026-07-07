@@ -47,6 +47,12 @@ fleet jobs <device>
 fleet log <device> <job-id>
 ```
 
+Do not choose PTY mode only because a command is long-running. For long
+non-interactive jobs such as builds, installs, training, or batch scripts,
+prefer `fleet exec --detach` and monitor with `fleet jobs` / `fleet log`.
+Use PTY mode for long work only when an interactive shell state must survive
+across multiple Agent steps.
+
 Use Fleet transfer commands for files:
 
 ```bash
@@ -156,6 +162,17 @@ fleet cleanup [device]
 This kills the remote tmux session for the current `RPTY_SESSION + device` and
 removes temporary payload files. It does not remove regular Fleet state or local
 logs.
+
+AgentFleet does not auto-destroy PTY sessions after each command; persistence is
+the feature. At the end of a task, run `fleet cleanup [device]` unless the user
+explicitly wants to resume that shell later. If many old AgentFleet tmux
+sessions exist on a device, use the explicit bulk cleanup:
+
+```bash
+fleet cleanup --all <device>
+```
+
+`--all` only targets remote tmux sessions whose names start with `rpty-`.
 
 ## Bash Shim
 
