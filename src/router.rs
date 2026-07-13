@@ -50,10 +50,16 @@ impl Router {
 
     pub fn ensure_session(&self, device: &str) -> Result<String, String> {
         let session = self.tmux_session(device);
+        // Wide pane + large scrollback: capture-pane output is the transport,
+        // so an 80-column pane hard-wraps long lines and the default 2000-line
+        // history silently drops the head of large outputs.
         let script = format!(
             "mkdir -p /tmp/rpty-router; \
              if ! tmux has-session -t {session} 2>/dev/null; then \
-               tmux new-session -d -s {session} \"bash -lc '[ -f \\\"$HOME/.profile.d/mirrors.sh\\\" ] && . \\\"$HOME/.profile.d/mirrors.sh\\\"; exec bash -i'\"; \
+               tmux start-server ';' set-option -g history-limit 100000 ';' \
+                 new-session -d -x 200 -y 50 -s {session} \"bash -lc '[ -f \\\"$HOME/.profile.d/mirrors.sh\\\" ] && . \\\"$HOME/.profile.d/mirrors.sh\\\"; exec bash -i'\"; \
+             else \
+               tmux resize-window -x 200 -y 50 -t {session} 2>/dev/null || true; \
              fi"
         );
         self.exec_shell(device, &script, 60)
@@ -64,9 +70,9 @@ impl Router {
     pub fn run_command(&self, device: &str, command: &str) -> Result<RouterRun, String> {
         let session = self.ensure_session(device)?;
         let nonce = nonce();
-        let payload = command_payload(command, &nonce);
-        let local_path = write_temp_payload(&nonce, &payload)?;
         let remote_path = format!("/tmp/rpty-router/{session}-{nonce}.cmd");
+        let payload = command_payload(command, &nonce, &remote_path);
+        let local_path = write_temp_payload(&nonce, &payload)?;
 
         let push = self
             .fleet
@@ -81,10 +87,14 @@ impl Router {
 
         self.exec_tmux(device, &["send-keys", "-t", &session, "C-l"], 60)?;
         self.exec_tmux(device, &["clear-history", "-t", &session], 60)?;
-        self.exec_tmux(device, &["load-buffer", "-b", &nonce, &remote_path], 60)?;
+        // Source the pushed payload instead of pasting it: sourcing keeps
+        // cwd/env state in the shell, while the marker lines never appear as
+        // echoed input, so the pane cannot show a false exit marker. The
+        // space is sent as the tmux key name because the exec transport does
+        // not preserve spaces inside a single argument.
         self.exec_tmux(
             device,
-            &["paste-buffer", "-d", "-b", &nonce, "-t", &session],
+            &["send-keys", "-t", &session, ".", "Space", &remote_path, "Enter"],
             60,
         )?;
 
@@ -272,9 +282,11 @@ rm -f /tmp/rpty-router/rpty-*.cmd
     }
 
     fn capture_session(&self, device: &str, session: &str) -> Result<String, String> {
+        // -J rejoins lines the pane hard-wrapped; -S - captures from the
+        // start of history so large outputs are not truncated.
         self.exec_tmux(
             device,
-            &["capture-pane", "-p", "-S", "-2000", "-t", session],
+            &["capture-pane", "-p", "-J", "-S", "-", "-t", session],
             60,
         )
     }
@@ -287,7 +299,10 @@ rm -f /tmp/rpty-router/rpty-*.cmd
 
         loop {
             let last = self.capture_session(device, session)?;
-            if last.contains(&marker) {
+            let done = last
+                .lines()
+                .any(|line| line.trim_end_matches('\r').starts_with(&marker));
+            if done {
                 return Ok(last);
             }
             if SystemTime::now() >= deadline {
@@ -303,11 +318,13 @@ rm -f /tmp/rpty-router/rpty-*.cmd
     }
 }
 
-pub fn command_payload(command: &str, nonce: &str) -> String {
+pub fn command_payload(command: &str, nonce: &str, remote_path: &str) -> String {
     let mut payload = String::new();
+    payload.push_str(&format!("printf '\\n__RPTY_BEGIN__:{nonce}:\\n'\n"));
     payload.push_str(command.trim_end());
     payload.push('\n');
     payload.push_str(&format!("printf '\\n__RPTY_EXIT__:{nonce}:%s\\n' \"$?\"\n"));
+    payload.push_str(&format!("rm -f -- {remote_path}\n"));
     payload
 }
 
@@ -428,11 +445,12 @@ mod tests {
     }
 
     #[test]
-    fn payload_preserves_command_and_adds_marker() {
-        let payload = command_payload("echo '$HOME'; false", "abc");
-        assert!(payload.starts_with("echo '$HOME'; false\n"));
-        assert!(payload.contains("__RPTY_EXIT__:abc"));
-        assert!(payload.ends_with("\"$?\"\n"));
+    fn payload_preserves_command_and_adds_markers() {
+        let payload = command_payload("echo '$HOME'; false", "abc", "/tmp/rpty-router/s-abc.cmd");
+        assert!(payload.starts_with("printf '\\n__RPTY_BEGIN__:abc:\\n'\n"));
+        assert!(payload.contains("\necho '$HOME'; false\n"));
+        assert!(payload.contains("printf '\\n__RPTY_EXIT__:abc:%s\\n' \"$?\"\n"));
+        assert!(payload.ends_with("rm -f -- /tmp/rpty-router/s-abc.cmd\n"));
     }
 
     #[test]
