@@ -456,6 +456,10 @@ fn install_runtime_binary(dir: &std::path::Path) -> Result<std::path::PathBuf, S
         .zip(std::fs::canonicalize(&runtime).ok())
         .is_some_and(|(current, installed)| current == installed);
     if !same_file {
+        // Unlink before copying: overwriting a signed Mach-O in place leaves
+        // a stale code-signature cache entry and macOS then SIGKILLs every
+        // subsequent invocation of the binary.
+        let _ = std::fs::remove_file(&runtime);
         std::fs::copy(&exe, &runtime).map_err(|err| {
             format!(
                 "failed to install runtime binary {}: {err}",
