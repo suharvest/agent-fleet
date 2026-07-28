@@ -179,6 +179,9 @@ fleet run --host radxa -- 'echo "one command back on radxa"'
 Use:
 
 - `fleet use <device>` to change the current target for this agent session.
+  Until you run it, plain shell commands stay local: the bash shim routes only
+  for sessions that opted in, so it never hijacks `bash -c` calls made by git
+  hooks, pre-commit, or build scripts. `fleet unuse` returns to local bash.
 - ordinary shell commands for stateful work on the current target.
 - `fleet run -- <cmd>` when an explicit, scriptable wrapper is clearer than the
   bash shim.

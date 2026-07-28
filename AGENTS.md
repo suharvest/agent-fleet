@@ -180,6 +180,14 @@ bash -c '<cmd>'
 and routes them to the current host. Unsupported bash calls fall back to
 `/bin/bash`. Use `RPTY_BASH_PASSTHROUGH=1` to force local bash.
 
+Interception is opt-in per session. The shim routes only when `RPTY_SESSION`
+is set and that session ran `use <device>`; it never falls back to the global
+`current_host`. The shim sits on `PATH` for every process, so a global default
+would capture `bash -c` calls nobody aimed at Fleet — git hooks, pre-commit,
+build scripts, `child_process` — and run them on a remote host in the wrong
+working directory. `where` reports the shim's routing state; `unuse` clears
+the current host and returns the session to local bash.
+
 ## Productization Checks
 
 Before calling the tool product-ready, verify:

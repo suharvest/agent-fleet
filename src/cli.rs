@@ -40,6 +40,7 @@ where
             .map_err(|err| err.to_string()),
         [cmd] if cmd == "where" => where_current(),
         [cmd, host] if cmd == "use" => use_host(host),
+        [cmd] if cmd == "unuse" => unuse_host(),
         [cmd, rest @ ..] if cmd == "run" => run_command(rest),
         [cmd, rest @ ..] if cmd == "env" => env_summary(rest),
         [cmd, rest @ ..] if cmd == "capture" || cmd == "logs" => capture(rest),
@@ -90,6 +91,7 @@ Usage:
   {bin} run --host <device> -- <cmd>
   {bin} env [device]
   {bin} use <device>
+  {bin} unuse                       # stop routing bash; run locally again
   {bin} where
   {bin} shell
   {bin} agent <cmd> [args...]
@@ -122,11 +124,18 @@ where
         return run_system_bash(&args);
     }
 
+    // Only route when this agent session explicitly opted in. Without a
+    // session-scoped host we fall through to the real bash: the shim sits on
+    // PATH for every process, and hijacking unrelated `bash -c` calls (git
+    // hooks, pre-commit, build scripts) into a remote session breaks them.
+    let host = match state::shim_host() {
+        Ok(Some(host)) => host,
+        Ok(None) => return run_system_bash(&args),
+        Err(err) => return Err(format!("failed to read current host: {err}")),
+    };
+
     if let Some(command) = command {
         let router = Router::new();
-        let host = state::current_host()
-            .map_err(|err| format!("failed to read current host: {err}"))?
-            .ok_or_else(|| "bash shim has no current host; run `rpty use <device>`".to_string())?;
         let _lock = SessionLock::acquire(router.session_id(), &host)?;
         let run = router.run_command(&host, &command)?;
         let code = print_run(&run);
@@ -153,10 +162,25 @@ fn use_host(host: &str) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn unuse_host() -> Result<ExitCode, String> {
+    let cleared = state::clear_current_host()
+        .map_err(|err| format!("failed to clear current host: {err}"))?;
+    if cleared {
+        println!("Current host: <unset> (bash routes locally)");
+    } else {
+        println!("Current host was already unset");
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn where_current() -> Result<ExitCode, String> {
     match state::current_host().map_err(|err| format!("failed to read current host: {err}"))? {
         Some(host) => println!("Current host: {host}"),
         None => println!("Current host: <unset>"),
+    }
+    match state::shim_host().map_err(|err| format!("failed to read current host: {err}"))? {
+        Some(host) => println!("bash shim: routed to {host}"),
+        None => println!("bash shim: local (run `rpty use <device>` in this session to route)"),
     }
     Ok(ExitCode::SUCCESS)
 }
