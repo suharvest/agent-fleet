@@ -94,7 +94,15 @@ impl Router {
         // not preserve spaces inside a single argument.
         self.exec_tmux(
             device,
-            &["send-keys", "-t", &session, ".", "Space", &remote_path, "Enter"],
+            &[
+                "send-keys",
+                "-t",
+                &session,
+                ".",
+                "Space",
+                &remote_path,
+                "Enter",
+            ],
             60,
         )?;
 
