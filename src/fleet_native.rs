@@ -612,6 +612,12 @@ impl NativeFleet {
 
         let mut results = Map::new();
         let command = join_exec_command(&args.command, args.literal, args.shell);
+        let mut warning = String::new();
+        if !args.raw && has_trailing_ampersand(&command) {
+            warning.push_str(
+                "warning: trailing '&' will be killed when the SSH channel closes; use --detach\n",
+            );
+        }
         for device in &targets {
             let mut device = device.clone();
             if let Some(host) = &args.host {
@@ -640,10 +646,12 @@ impl NativeFleet {
             }
         }
         if args.json {
-            return json_output(Value::Object(results), 0);
+            let mut out = json_output(Value::Object(results), 0)?;
+            out.stderr.insert_str(0, &warning);
+            return Ok(out);
         }
         let mut stdout_text = String::new();
-        let mut stderr_text = String::new();
+        let mut stderr_text = warning.clone();
         let mut ok_all = true;
         for (index, device) in targets.iter().enumerate() {
             if targets.len() > 1 {
@@ -1050,10 +1058,11 @@ impl NativeFleet {
             }
             format!("trap '' HUP; setsid sh -c 'exec </dev/null; nohup {script_path} >> /tmp/fleet-jobs/{job_id}.log 2>&1 &'")
         } else {
-            format!(
-                "nohup sh -c {} >> /tmp/fleet-jobs/{job_id}.log 2>&1 & echo $! > /tmp/fleet-jobs/{job_id}.pid",
+            let inner = format!(
+                "exec </dev/null; nohup sh -c {} >> /tmp/fleet-jobs/{job_id}.log 2>&1 & echo $! > /tmp/fleet-jobs/{job_id}.pid",
                 sh_quote(&command)
-            )
+            );
+            format!("trap '' HUP; setsid sh -c {}", sh_quote(&inner))
         };
         match ssh_exec(device, &launch, Duration::from_secs(15), args.sudo, false) {
             Ok(run) if run.success => {}
@@ -3818,6 +3827,13 @@ fn build_remote_command(
     )
 }
 
+/// True when the command ends in a background `&` (but not `&&`), which the SSH
+/// channel kills on close.
+fn has_trailing_ampersand(command: &str) -> bool {
+    let trimmed = command.trim_end();
+    trimmed.ends_with('&') && !trimmed.ends_with("&&")
+}
+
 fn shlex_join(parts: &[String]) -> String {
     parts
         .iter()
@@ -4280,6 +4296,14 @@ mod exec_cmd_tests {
             built,
             wrap_remote_command("echo 'a#b;c'", false, false, false)
         );
+    }
+
+    #[test]
+    fn trailing_ampersand_detection() {
+        assert!(has_trailing_ampersand("sleep 30 &"));
+        assert!(has_trailing_ampersand("sleep 30 &   "));
+        assert!(!has_trailing_ampersand("true && echo ok"));
+        assert!(!has_trailing_ampersand("echo done"));
     }
 
     #[test]
