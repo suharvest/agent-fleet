@@ -1,3 +1,6 @@
 target/
 .DS_Store
 fleet_backend/devices.json
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -40,12 +40,23 @@ Use regular Fleet execution when the command is stateless:
 
 ```bash
 fleet exec <device> -- hostname
+fleet exec <device> -- "ls /tmp | wc -l"          # one token: shell snippet
+fleet exec <device> -- grep -E "a|b" /etc/hosts   # many tokens: argv, quoted
 fleet exec --literal <device> -- 'python -c "print(1)"'
 fleet exec --sudo <device> -- apt-get update
 fleet exec --detach <device> -- ./long-job.sh
 fleet jobs <device>
 fleet log <device> <job-id>
 ```
+
+Quoting rules: exactly one token after `--` is a shell snippet (pipes and
+redirects work); two or more tokens are argv and get shell-quoted, so `#`, `;`,
+`|`, spaces and nested quotes inside one argument survive. `--shell` restores
+the old join-with-spaces behaviour, `--literal` quotes every token, `--raw`
+sends the command verbatim. `--sudo` runs the whole command as root.
+
+Never end an `exec` command with `&` - the SSH channel close kills it. Use
+`--detach`.
 
 Do not choose PTY mode only because a command is long-running. For long
 non-interactive jobs such as builds, installs, training, or batch scripts,
