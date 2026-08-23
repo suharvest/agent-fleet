@@ -147,6 +147,55 @@ def is_windows_device(dev) -> bool:
     return "windows" in str(dev.get("specs", {}).get("os", "")).lower()
 
 
+REMOTE_ENV_PREFIX = (
+    'export PATH="$HOME/.local/bin:$PATH"; '
+    '[ -f "$HOME/.profile.d/mirrors.sh" ] && . "$HOME/.profile.d/mirrors.sh"; '
+)
+
+
+def join_exec_command(tokens, literal=False, shell=False):
+    """Join the tokens that followed `--` into a single remote command string.
+
+    literal -> shlex.join every token (argv preserved verbatim).
+    shell   -> join with spaces and treat the result as a shell snippet (legacy).
+    default -> one token is a shell snippet; two or more are argv and get
+               shlex-joined so quoting survives the remote shell.
+    """
+    if literal:
+        return shlex.join(tokens)
+    if shell:
+        return " ".join(tokens)
+    if len(tokens) == 1:
+        return tokens[0]
+    return shlex.join(tokens)
+
+
+def wrap_remote_command(command, sudo=False, raw=False, windows=False):
+    """Hand the command to `bash -c` as one quoted argument.
+
+    The login shell then never re-parses it, so `#`, `;`, `|` and quotes keep
+    the meaning the caller intended. Under sudo the whole string runs as root,
+    not just the part before the first `;`.
+    """
+    if windows or raw:
+        return command
+    if sudo:
+        return ('sudo -S -p \'\' env DEBIAN_FRONTEND=noninteractive '
+                'PATH="$HOME/.local/bin:$PATH" bash -c ' + shlex.quote(command))
+    return "bash -c " + shlex.quote(REMOTE_ENV_PREFIX + command)
+
+
+def build_remote_command(tokens, literal=False, shell=False, sudo=False, raw=False, windows=False):
+    """Full pipeline: join the `--` tokens, then wrap them for the remote shell."""
+    return wrap_remote_command(join_exec_command(tokens, literal, shell), sudo, raw, windows)
+
+
+def has_trailing_ampersand(command):
+    """True when the command ends in a background `&` (but not `&&`)."""
+    trimmed = command.rstrip()
+    return trimmed.endswith("&") and not trimmed.endswith("&&")
+
+
 def ssh_exec(host, user, password, command, timeout=CMD_TIMEOUT, sudo=False, port=22, stream=False, raw=False, windows=False):
     """Execute command via SSH, return (success, stdout_text).
 
@@ -169,7 +218,7 @@ def ssh_exec(host, user, password, command, timeout=CMD_TIMEOUT, sudo=False, por
             # binaries (uv, pipx, etc.) are found.
             channel = client.get_transport().open_session()
             channel.get_pty()
-            sudo_cmd = f'sudo -S -p \'\' env DEBIAN_FRONTEND=noninteractive PATH="$HOME/.local/bin:$PATH" {command}'
+            sudo_cmd = wrap_remote_command(command, sudo=True)
             channel.exec_command(sudo_cmd)
             channel.send(password + "\n")
             channel.shutdown_write()
@@ -223,10 +272,7 @@ def ssh_exec(host, user, password, command, timeout=CMD_TIMEOUT, sudo=False, por
             # raw/windows: pass the command verbatim (no bash wrapper).
             # Windows cmd.exe/PowerShell chokes on the `export ...;` prefix
             # below — auto-skipped for devices tagged 'windows'.
-            if raw or windows:
-                wrapped = command
-            else:
-                wrapped = f'export PATH="$HOME/.local/bin:$PATH"; [ -f "$HOME/.profile.d/mirrors.sh" ] && . "$HOME/.profile.d/mirrors.sh"; {command}'
+            wrapped = wrap_remote_command(command, raw=raw, windows=windows)
             if stream:
                 import time
                 channel = client.get_transport().open_session()
@@ -921,12 +967,10 @@ def cmd_exec(args):
             file=sys.stderr,
         )
         sys.exit(2)
-    if not args.literal and any(p == "-c" for p in cmd_parts):
+    if args.shell and any(p == "-c" for p in cmd_parts):
         print(
-            f"Warning: command uses '-c' without --literal — quoting will be destroyed.\n"
-            f"         Add --literal to preserve: fleet exec --literal {args.device} -- {' '.join(cmd_parts)}\n"
-            f"         Rules: --literal needed for bash/python -c, awk/sed scripts, heredocs.\n"
-            f"         No --literal needed for: simple cmds, pipes (|), redirects (>), globs (*).",
+            f"Warning: --shell joins tokens without quoting, so '-c' payloads lose their quoting.\n"
+            f"         Drop --shell (the default keeps multi-token argv intact) or use --literal.",
             file=sys.stderr,
         )
     if any("<<" in p for p in cmd_parts):
@@ -939,7 +983,10 @@ def cmd_exec(args):
             f"           3. fleet exec {args.device} -- bash <remote>",
             file=sys.stderr,
         )
-    command = shlex.join(cmd_parts) if args.literal else " ".join(cmd_parts)
+    command = join_exec_command(cmd_parts, args.literal, args.shell)
+    if not args.raw and not args.detach and has_trailing_ampersand(command):
+        print("warning: trailing '&' will be killed when the SSH channel closes; use --detach",
+              file=sys.stderr)
 
     if args.stream:
         if args.sudo:
@@ -1015,11 +1062,13 @@ def cmd_exec(args):
                 f"nohup {script_path} >> {jobs_dir}/{job_id}.log 2>&1 &'"
             )
         else:
-            launch_cmd = (
+            inner = (
+                f"exec </dev/null; "
                 f"nohup sh -c {shlex.quote(command)} "
                 f">> {jobs_dir}/{job_id}.log 2>&1 & "
                 f"echo $! > {jobs_dir}/{job_id}.pid"
             )
+            launch_cmd = f"trap '' HUP; setsid sh -c {shlex.quote(inner)}"
         ok, output = ssh_exec(host, user, password, launch_cmd, timeout=15,
                               port=port, sudo=args.sudo)
 
@@ -2146,6 +2195,7 @@ def main():
     p_exec.add_argument("--host", help="Override device IP/hostname (temporary)")
     p_exec.add_argument("--json", dest="json_output", action="store_true", help="JSON output")
     p_exec.add_argument("--literal", action="store_true", help="Preserve quoting via shlex.join (use for python -c, heredoc, complex strings). Disables remote shell interpretation of pipes/vars/globs — wrap with bash -c '...' if you need those.")
+    p_exec.add_argument("--shell", action="store_true", help="Join all tokens with spaces and run the result as a remote shell snippet (legacy behaviour; quoting is NOT preserved).")
     p_exec.add_argument("--stream", action="store_true", help="Stream stdout/stderr live as they arrive (for long builds). Single target only; not compatible with --sudo or --json.")
     p_exec.add_argument("--detach", action="store_true", help="Run in background via nohup, return job ID immediately. Use 'fleet jobs/log/kill' to manage.")
     p_exec.add_argument("--raw", action="store_true", help="Send the command verbatim with no bash wrapper. Required for Windows (cmd.exe/PowerShell) devices, which choke on the POSIX 'export ...;' prefix.")
