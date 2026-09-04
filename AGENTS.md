@@ -45,6 +45,12 @@ Preserve:
 
 - `exec --sudo` for privileged commands;
 - `exec --literal` for `python -c`, `bash -c`, awk/sed, heredoc-adjacent cases;
+- `exec` default quoting: one token after `--` is a shell snippet, two or more
+  are argv and get shell-quoted; `--shell` opts back into the old
+  join-with-spaces behaviour;
+- `exec` always runs the remote command through `bash -c '<one argument>'`, and
+  `--sudo` puts the whole command under sudo rather than only its first
+  statement;
 - `exec --stream` for live build output;
 - `exec --detach` plus `jobs/log/kill-job` for non-interactive long jobs;
 - `bootstrap` mirror/proxy behavior;

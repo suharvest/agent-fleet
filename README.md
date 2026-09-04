@@ -209,6 +209,31 @@ fleet exec home-win -- powershell -NoProfile -Command '$PSVersionTable.PSVersion
 fleet exec home-win -- cmd.exe /C echo ok
 ```
 
+## Exec Quoting Rules
+
+`fleet exec <device> -- <tokens...>` decides how the tokens become a remote
+command:
+
+| Form | Rule | Example |
+|---|---|---|
+| Exactly one token after `--` | Treated as a shell snippet: pipes, redirects, `&&`, globs all work | `fleet exec dev -- "ls /tmp \| wc -l"` |
+| Two or more tokens after `--` | Treated as argv and shell-quoted, so `#`, `;`, `\|`, spaces and quotes inside a single argument survive | `fleet exec dev -- grep -E "a\|b" file` |
+| `--shell` | Joins every token with spaces and runs the result as a shell snippet (the pre-0.1 behaviour; quoting is not preserved) | `fleet exec --shell dev -- echo a \| wc -c` |
+| `--literal` | Shell-quotes every token, including a single one | `fleet exec --literal dev -- python3 -c "print(1)"` |
+| `--raw` | Sent verbatim with no wrapper (Windows cmd.exe / PowerShell) | `fleet exec --raw win -- dir` |
+
+Precedence when several are given: `--literal` > `--shell` > default.
+
+The command is always handed to the remote `bash -c` as one quoted argument, so
+the login shell never re-parses it. With `--sudo` the entire command runs as
+root - `fleet exec --sudo dev -- bash -c 'id -u; id -u'` prints `0` twice, not
+`0` then your own uid.
+
+Background work needs `--detach`, not a trailing `&`: a trailing `&` dies when
+the SSH channel closes, and `fleet exec` prints a warning when it sees one.
+`--detach` starts the job under `setsid` with stdin detached, so it survives
+the SSH session.
+
 Persistent PTY on a Windows host should use its WSL2 Fleet device:
 
 ```bash
@@ -300,7 +325,7 @@ This keeps command bytes intact and preserves shell state across agent steps.
 Existing Fleet behavior remains the device-runtime contract:
 
 ```text
-exec, exec --sudo, exec --literal, exec --stream, exec --detach,
+exec, exec --sudo, exec --literal, exec --shell, exec --stream, exec --detach,
 jobs, log, kill-job, bootstrap, push, pull, transfer,
 work-sync, work-enter, work-monitor, wsl
 ```

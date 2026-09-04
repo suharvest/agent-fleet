@@ -109,6 +109,44 @@ persistent PTY router."
     );
 }
 
+/// Resolve the command name a binary was invoked as.
+///
+/// `RPTY_ARGV0` wins when set: the agent shims re-exec the runtime with the
+/// original name in that variable.
+pub fn invoked_as(argv0: &str) -> String {
+    if let Ok(routed) = std::env::var("RPTY_ARGV0") {
+        if !routed.is_empty() {
+            return routed;
+        }
+    }
+    std::path::Path::new(argv0)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("rpty")
+        .to_string()
+}
+
+/// Entry point shared by every binary target: dispatch on the invoked name.
+///
+/// `install` / `install-shim` copy ONE runtime binary and symlink every
+/// command name (`rpty`, `fleet`, `bash`) at it, so whichever bin target that
+/// copy was built from has to honour all of them. Keeping this branch in one
+/// place stops a second entry point from silently losing the bash shim — the
+/// `fleet` bin did exactly that: invoked as `bash` it fell through to the
+/// subcommand parser and died with `unknown or unimplemented command: -c`,
+/// breaking every `#!/usr/bin/env bash` script (git hooks, pre-commit,
+/// secret-run) while the shim dir sat on PATH.
+pub fn run_invoked_as<I>(argv0: &str, args: I) -> Result<ExitCode, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    if invoked_as(argv0) == "bash" {
+        run_bash_shim(args)
+    } else {
+        run(args)
+    }
+}
+
 pub fn run_bash_shim<I>(args: I) -> Result<ExitCode, String>
 where
     I: IntoIterator<Item = String>,
@@ -698,10 +736,17 @@ fn install_link(dir: &std::path::Path, name: &str, exe: &std::path::Path) -> Res
 #[cfg(windows)]
 fn windows_command_wrapper_script(name: &str, exe: &Path) -> String {
     let exe = exe.display();
+    // `setlocal` keeps RPTY_ARGV0 inside this wrapper — cmd discards the local
+    // scope when the script exits, and the exit code still propagates. Without
+    // it the variable survives in the calling cmd session, and because it
+    // outranks argv0 in `invoked_as`, a later `fleet.cmd` would dispatch as the
+    // bash shim. The non-bash wrapper clears any inherited value for the same
+    // reason.
     if name == "bash" {
         format!(
             r#"@echo off
 rem AgentFleet command shim
+setlocal
 set "RPTY_ARGV0=bash"
 "{exe}" %*
 "#
@@ -710,6 +755,8 @@ set "RPTY_ARGV0=bash"
         format!(
             r#"@echo off
 rem AgentFleet command shim
+setlocal
+set "RPTY_ARGV0="
 "{exe}" %*
 "#
         )

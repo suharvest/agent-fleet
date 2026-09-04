@@ -100,6 +100,7 @@ struct ExecArgs {
     host: Option<String>,
     json: bool,
     literal: bool,
+    shell: bool,
     stream: bool,
     detach: bool,
     raw: bool,
@@ -610,11 +611,13 @@ impl NativeFleet {
         }
 
         let mut results = Map::new();
-        let command = if args.literal {
-            shlex_join(&args.command)
-        } else {
-            args.command.join(" ")
-        };
+        let command = join_exec_command(&args.command, args.literal, args.shell);
+        let mut warning = String::new();
+        if !args.raw && has_trailing_ampersand(&command) {
+            warning.push_str(
+                "warning: trailing '&' will be killed when the SSH channel closes; use --detach\n",
+            );
+        }
         for device in &targets {
             let mut device = device.clone();
             if let Some(host) = &args.host {
@@ -643,10 +646,12 @@ impl NativeFleet {
             }
         }
         if args.json {
-            return json_output(Value::Object(results), 0);
+            let mut out = json_output(Value::Object(results), 0)?;
+            out.stderr.insert_str(0, &warning);
+            return Ok(out);
         }
         let mut stdout_text = String::new();
-        let mut stderr_text = String::new();
+        let mut stderr_text = warning.clone();
         let mut ok_all = true;
         for (index, device) in targets.iter().enumerate() {
             if targets.len() > 1 {
@@ -1003,11 +1008,7 @@ impl NativeFleet {
     }
 
     fn exec_detach(&self, device: &Device, args: &ExecArgs) -> Result<NativeOutput, String> {
-        let command = if args.literal {
-            shlex_join(&args.command)
-        } else {
-            args.command.join(" ")
-        };
+        let command = join_exec_command(&args.command, args.literal, args.shell);
         let job_id = make_job_id();
         let started_at = timestamp_seconds();
         let metadata = json!({
@@ -1057,10 +1058,11 @@ impl NativeFleet {
             }
             format!("trap '' HUP; setsid sh -c 'exec </dev/null; nohup {script_path} >> /tmp/fleet-jobs/{job_id}.log 2>&1 &'")
         } else {
-            format!(
-                "nohup sh -c {} >> /tmp/fleet-jobs/{job_id}.log 2>&1 & echo $! > /tmp/fleet-jobs/{job_id}.pid",
+            let inner = format!(
+                "exec </dev/null; nohup sh -c {} >> /tmp/fleet-jobs/{job_id}.log 2>&1 & echo $! > /tmp/fleet-jobs/{job_id}.pid",
                 sh_quote(&command)
-            )
+            );
+            format!("trap '' HUP; setsid sh -c {}", sh_quote(&inner))
         };
         match ssh_exec(device, &launch, Duration::from_secs(15), args.sudo, false) {
             Ok(run) if run.success => {}
@@ -1941,6 +1943,7 @@ fn parse_exec_args(args: &[String]) -> Result<ExecArgs, String> {
         host: None,
         json: false,
         literal: false,
+        shell: false,
         stream: false,
         detach: false,
         raw: false,
@@ -1976,6 +1979,7 @@ fn parse_exec_args(args: &[String]) -> Result<ExecArgs, String> {
             }
             "--json" => parsed.json = true,
             "--literal" => parsed.literal = true,
+            "--shell" => parsed.shell = true,
             "--stream" => parsed.stream = true,
             "--detach" => parsed.detach = true,
             "--raw" => parsed.raw = true,
@@ -2742,20 +2746,12 @@ fn ssh_exec(
     let mut channel = session
         .channel_session()
         .map_err(|err| format!("failed to open SSH channel: {err}"))?;
-    let wrapped = if sudo {
+    if sudo {
         channel
             .request_pty("xterm", None, Some((80, 24, 0, 0)))
             .map_err(|err| format!("failed to request PTY: {err}"))?;
-        format!(
-            "sudo -S -p '' env DEBIAN_FRONTEND=noninteractive PATH=\"$HOME/.local/bin:$PATH\" {command}"
-        )
-    } else if raw || device.is_windows() {
-        command.to_string()
-    } else {
-        format!(
-            "export PATH=\"$HOME/.local/bin:$PATH\"; [ -f \"$HOME/.profile.d/mirrors.sh\" ] && . \"$HOME/.profile.d/mirrors.sh\"; {command}"
-        )
-    };
+    }
+    let wrapped = wrap_remote_command(command, sudo, raw, device.is_windows());
 
     channel
         .exec(&wrapped)
@@ -3344,21 +3340,13 @@ mod win_ssh {
             .await
             .map_err(|err| format!("failed to open SSH channel: {err}"))?;
 
-        let wrapped = if sudo {
+        if sudo {
             channel
                 .request_pty(true, "xterm", 80, 24, 0, 0, &[])
                 .await
                 .map_err(|err| format!("failed to request PTY: {err}"))?;
-            format!(
-                "sudo -S -p '' env DEBIAN_FRONTEND=noninteractive PATH=\"$HOME/.local/bin:$PATH\" {command}"
-            )
-        } else if raw || device.is_windows() {
-            command.to_string()
-        } else {
-            format!(
-                "export PATH=\"$HOME/.local/bin:$PATH\"; [ -f \"$HOME/.profile.d/mirrors.sh\" ] && . \"$HOME/.profile.d/mirrors.sh\"; {command}"
-            )
-        };
+        }
+        let wrapped = wrap_remote_command(command, sudo, raw, device.is_windows());
 
         channel
             .exec(true, wrapped)
@@ -3773,6 +3761,79 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Environment prologue prepended to every non-raw remote command.
+const REMOTE_ENV_PREFIX: &str = "export PATH=\"$HOME/.local/bin:$PATH\"; \
+[ -f \"$HOME/.profile.d/mirrors.sh\" ] && . \"$HOME/.profile.d/mirrors.sh\"; ";
+
+/// Join the tokens that followed `--` into a single remote command string.
+///
+/// * `literal` - shlex-join every token; the remote shell re-parses it back into
+///   the exact same argv.
+/// * `shell` - join with spaces and treat the result as a shell snippet. This is
+///   the legacy (pre-fix) behaviour, now opt-in via `--shell`.
+/// * default - one token is a shell snippet (`fleet exec dev -- "ls | wc -l"`),
+///   two or more tokens are argv and get shlex-joined so quoting survives
+///   (`fleet exec dev -- grep -E "a|b" f`).
+fn join_exec_command(tokens: &[String], literal: bool, shell: bool) -> String {
+    if literal {
+        return shlex_join(tokens);
+    }
+    if shell {
+        return tokens.join(" ");
+    }
+    if tokens.len() == 1 {
+        return tokens[0].clone();
+    }
+    shlex_join(tokens)
+}
+
+/// Wrap a remote command string so the login shell never re-parses it.
+///
+/// The command is always handed to `bash -c` as one quoted argument, so `#`,
+/// `;`, `|` and quotes inside it keep the meaning the caller intended. With
+/// `sudo` the whole string runs under sudo, not just the part before the first
+/// `;`.
+fn wrap_remote_command(command: &str, sudo: bool, raw: bool, windows: bool) -> String {
+    if windows || raw {
+        return command.to_string();
+    }
+    if sudo {
+        return format!(
+            "sudo -S -p '' env DEBIAN_FRONTEND=noninteractive PATH=\"$HOME/.local/bin:$PATH\" bash -c {}",
+            sh_quote(command)
+        );
+    }
+    format!(
+        "bash -c {}",
+        sh_quote(&format!("{REMOTE_ENV_PREFIX}{command}"))
+    )
+}
+
+/// Full pipeline: join the `--` tokens, then wrap them for the remote shell.
+#[cfg(test)]
+fn build_remote_command(
+    tokens: &[String],
+    literal: bool,
+    shell: bool,
+    sudo: bool,
+    raw: bool,
+    windows: bool,
+) -> String {
+    wrap_remote_command(
+        &join_exec_command(tokens, literal, shell),
+        sudo,
+        raw,
+        windows,
+    )
+}
+
+/// True when the command ends in a background `&` (but not `&&`), which the SSH
+/// channel kills on close.
+fn has_trailing_ampersand(command: &str) -> bool {
+    let trimmed = command.trim_end();
+    trimmed.ends_with('&') && !trimmed.ends_with("&&")
+}
+
 fn shlex_join(parts: &[String]) -> String {
     parts
         .iter()
@@ -4135,5 +4196,121 @@ mod tests {
             "9d92249839466f75fdd779de964507b8"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod exec_cmd_tests {
+    use super::*;
+
+    fn toks(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn single_token_stays_a_shell_snippet() {
+        let cmd = join_exec_command(&toks(&["echo p | tr p q"]), false, false);
+        assert_eq!(cmd, "echo p | tr p q");
+    }
+
+    #[test]
+    fn multi_token_preserves_pipe_inside_an_argument() {
+        let cmd = join_exec_command(&toks(&["grep", "-E", "a|b", "f"]), false, false);
+        assert_eq!(cmd, "grep -E 'a|b' f");
+    }
+
+    #[test]
+    fn multi_token_preserves_hash_and_semicolon() {
+        let cmd = join_exec_command(&toks(&["echo", "a#b;c"]), false, false);
+        assert_eq!(cmd, "echo 'a#b;c'");
+    }
+
+    #[test]
+    fn multi_token_preserves_nested_quotes_and_spaces() {
+        let cmd = join_exec_command(
+            &toks(&["echo", "he said \"hi\"", "/tmp/my dir/x"]),
+            false,
+            false,
+        );
+        assert_eq!(cmd, "echo 'he said \"hi\"' '/tmp/my dir/x'");
+        let cmd = join_exec_command(&toks(&["echo", "it's"]), false, false);
+        assert_eq!(cmd, "echo 'it'\"'\"'s'");
+    }
+
+    #[test]
+    fn shell_flag_restores_naive_join() {
+        let cmd = join_exec_command(&toks(&["echo", "a#b;c"]), false, true);
+        assert_eq!(cmd, "echo a#b;c");
+    }
+
+    #[test]
+    fn literal_wins_over_shell() {
+        let cmd = join_exec_command(&toks(&["echo", "a#b;c"]), true, true);
+        assert_eq!(cmd, "echo 'a#b;c'");
+    }
+
+    #[test]
+    fn literal_shlex_joins_a_single_token() {
+        let cmd = join_exec_command(&toks(&["echo p | tr p q"]), true, false);
+        assert_eq!(cmd, "'echo p | tr p q'");
+    }
+
+    #[test]
+    fn plain_wrap_quotes_the_whole_command() {
+        let wrapped = wrap_remote_command("echo 'a#b;c'", false, false, false);
+        assert!(wrapped.starts_with("bash -c '"));
+        assert!(wrapped.ends_with('\''));
+        assert!(wrapped.contains("export PATH="));
+        // The user command must not leak into the outer shell unquoted.
+        assert!(!wrapped.contains("; echo 'a#b;c'"));
+    }
+
+    #[test]
+    fn sudo_wrap_covers_the_entire_command() {
+        let wrapped = wrap_remote_command("id -u; id -u", true, false, false);
+        assert_eq!(
+            wrapped,
+            "sudo -S -p '' env DEBIAN_FRONTEND=noninteractive PATH=\"$HOME/.local/bin:$PATH\" bash -c 'id -u; id -u'"
+        );
+        // Nothing after the sudo invocation may escape back to the login shell.
+        assert!(!wrapped.ends_with("; id -u"));
+    }
+
+    #[test]
+    fn raw_and_windows_are_left_verbatim() {
+        assert_eq!(
+            wrap_remote_command("dir C:\\", false, true, false),
+            "dir C:\\"
+        );
+        assert_eq!(
+            wrap_remote_command("dir C:\\", false, false, true),
+            "dir C:\\"
+        );
+    }
+
+    #[test]
+    fn build_remote_command_composes_join_and_wrap() {
+        let built =
+            build_remote_command(&toks(&["echo", "a#b;c"]), false, false, false, false, false);
+        assert_eq!(
+            built,
+            wrap_remote_command("echo 'a#b;c'", false, false, false)
+        );
+    }
+
+    #[test]
+    fn trailing_ampersand_detection() {
+        assert!(has_trailing_ampersand("sleep 30 &"));
+        assert!(has_trailing_ampersand("sleep 30 &   "));
+        assert!(!has_trailing_ampersand("true && echo ok"));
+        assert!(!has_trailing_ampersand("echo done"));
+    }
+
+    #[test]
+    fn parse_exec_args_accepts_shell_flag() {
+        let parsed = parse_exec_args(&toks(&["--shell", "dev", "--", "echo", "hi"])).unwrap();
+        assert!(parsed.shell);
+        assert!(!parsed.literal);
+        assert_eq!(parsed.command, toks(&["echo", "hi"]));
     }
 }
