@@ -31,10 +31,28 @@ python another_step.py
 fleet env
 ```
 
-After `fleet use <device>`, prefer ordinary shell commands. The installed bash
-shim routes common Agent shell calls (`bash -lc` / `bash -c`) to the current
-device. Use `fleet run -- <cmd>` only when an explicit wrapper is clearer, and
-use `fleet run --host <device> -- <cmd>` for one command on another device.
+After `fleet use <device>`, the installed bash shim routes shell calls made as
+`bash -lc` / `bash -c` to the current device. Use `fleet run -- <cmd>` when an
+explicit wrapper is clearer, and `fleet run --host <device> -- <cmd>` for one
+command on another device.
+
+**Check that your harness actually goes through `bash` before relying on the
+shim.** It only sees calls that literally invoke `bash`. An Agent whose tool
+shell is zsh or sh never touches it, and its commands then run *locally* even
+though `fleet where` reports a routed host — a silent wrong-machine execution.
+Claude Code is one such harness: its Bash tool runs `/bin/zsh`.
+
+One command settles it:
+
+```bash
+fleet use <device>
+hostname            # your harness's normal path
+bash -c hostname    # the shim's path
+```
+
+Same output twice: routing applies to your ordinary commands. Different: only
+explicit `bash -c` is routed, so use `fleet exec <device> -- <cmd>` or
+`fleet run --host <device> -- <cmd>` for everything else.
 
 Use regular Fleet execution when the command is stateless:
 
@@ -194,5 +212,10 @@ bash -lc '<cmd>'
 bash -c '<cmd>'
 ```
 
-Unsupported bash calls fall back to `/bin/bash`. Set
-`RPTY_BASH_PASSTHROUGH=1` to force local bash.
+Routing is opt-in per session: **without `fleet use <device>` every call runs
+locally**, and so does any shape the shim does not route (a script path, an
+interactive shell). That gate is deliberate — the shim sits on PATH for every
+process, so hijacking unrelated `bash` calls would break `#!/usr/bin/env bash`
+scripts such as git hooks, pre-commit and credential helpers.
+
+Set `RPTY_BASH_PASSTHROUGH=1` to force local bash even while routed.
