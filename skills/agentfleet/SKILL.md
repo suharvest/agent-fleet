@@ -48,8 +48,8 @@ command on another device.
 > 实测（2026-09-05，`fleet use wsl2-local` 之后）：
 >
 > ```
-> hostname            → HedeMacBook-Air.local   ← 本机
-> bash -c hostname    → HarvestSu               ← 远程设备
+> hostname            → <your-laptop>   ← 本机
+> bash -c hostname    → <device-hostname>               ← 远程设备
 > ```
 >
 > **所以在 Claude Code 里不要依赖「use 之后直接敲普通命令」这条路径**，

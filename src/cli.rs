@@ -736,10 +736,17 @@ fn install_link(dir: &std::path::Path, name: &str, exe: &std::path::Path) -> Res
 #[cfg(windows)]
 fn windows_command_wrapper_script(name: &str, exe: &Path) -> String {
     let exe = exe.display();
+    // `setlocal` keeps RPTY_ARGV0 inside this wrapper — cmd discards the local
+    // scope when the script exits, and the exit code still propagates. Without
+    // it the variable survives in the calling cmd session, and because it
+    // outranks argv0 in `invoked_as`, a later `fleet.cmd` would dispatch as the
+    // bash shim. The non-bash wrapper clears any inherited value for the same
+    // reason.
     if name == "bash" {
         format!(
             r#"@echo off
 rem AgentFleet command shim
+setlocal
 set "RPTY_ARGV0=bash"
 "{exe}" %*
 "#
@@ -748,6 +755,8 @@ set "RPTY_ARGV0=bash"
         format!(
             r#"@echo off
 rem AgentFleet command shim
+setlocal
+set "RPTY_ARGV0="
 "{exe}" %*
 "#
         )
