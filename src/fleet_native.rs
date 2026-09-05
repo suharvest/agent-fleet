@@ -2844,6 +2844,9 @@ fn ssh_session(device: &Device, timeout: Duration) -> Result<ssh2::Session, Stri
         .map_err(|err| format!("failed to connect to {addr}: {err}"))?;
     tcp.set_read_timeout(Some(timeout)).ok();
     tcp.set_write_timeout(Some(timeout)).ok();
+    // Without this, Nagle batching adds a delay to every small SSH packet and
+    // compounds the per-round-trip cost of SFTP transfers.
+    tcp.set_nodelay(true).ok();
     let mut session =
         ssh2::Session::new().map_err(|err| format!("failed to create SSH session: {err}"))?;
     session.set_tcp_stream(tcp);
@@ -3164,6 +3167,36 @@ fn cpu_load(value: &Value) -> f64 {
         .unwrap_or(99.0)
 }
 
+/// Buffer size used for SFTP streaming.
+///
+/// libssh2 splits one `sftp_write`/`sftp_read` call into 25000-byte SFTP
+/// packets and pipelines as many of them as the SSH window allows before
+/// waiting for acknowledgements. `std::io::copy` hands it only 8 KiB at a
+/// time, so every write costs one full request/response round trip and the
+/// transfer runs at `8 KiB / RTT` regardless of link bandwidth. Passing a
+/// multi-megabyte buffer lets libssh2 keep the window full instead.
+pub(crate) const SFTP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+
+/// Copy `reader` into `writer` using a large buffer so that SFTP writes are
+/// pipelined instead of one-round-trip-per-8-KiB.
+#[cfg(not(windows))]
+fn stream_copy<R: Read, W: Write>(reader: &mut R, writer: &mut W) -> std::io::Result<u64> {
+    let mut buffer = vec![0u8; SFTP_BUFFER_BYTES];
+    let mut total = 0u64;
+    loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
+        writer.write_all(&buffer[..read])?;
+        total += read as u64;
+    }
+    writer.flush()?;
+    Ok(total)
+}
+
 #[cfg(not(windows))]
 fn sftp_put(device: &Device, local: &Path, remote: &str) -> Result<u64, String> {
     let session = ssh_session(device, Duration::from_secs(60))?;
@@ -3175,8 +3208,11 @@ fn sftp_put(device: &Device, local: &Path, remote: &str) -> Result<u64, String> 
         .map_err(|err| format!("failed to create remote file {remote}: {err}"))?;
     let mut local_file = std::fs::File::open(local)
         .map_err(|err| format!("failed to open {}: {err}", local.display()))?;
-    let size = std::io::copy(&mut local_file, &mut remote_file)
+    let size = stream_copy(&mut local_file, &mut remote_file)
         .map_err(|err| format!("failed to upload {}: {err}", local.display()))?;
+    // Close the handle explicitly so that the SFTP server has flushed every
+    // queued packet before the caller runs the md5 verification.
+    drop(remote_file);
     Ok(size)
 }
 
@@ -3202,7 +3238,7 @@ fn sftp_get(device: &Device, remote: &str, local: &Path) -> Result<u64, String> 
     }
     let mut local_file = std::fs::File::create(local)
         .map_err(|err| format!("failed to create {}: {err}", local.display()))?;
-    let size = std::io::copy(&mut remote_file, &mut local_file)
+    let size = stream_copy(&mut remote_file, &mut local_file)
         .map_err(|err| format!("failed to download {remote}: {err}"))?;
     Ok(size)
 }
