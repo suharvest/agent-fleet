@@ -83,6 +83,26 @@ cargo run --bin fleet -- env radxa
 
 Commands that access Fleet devices may need approval outside the sandbox.
 
+### Transfer Throughput
+
+`push`, `pull` and `transfer` all stream through `sftp_put`/`sftp_get` in
+`src/fleet_native.rs`. Both copy through a 4 MiB buffer on purpose: libssh2
+pipelines SFTP packets only as far as one call's buffer reaches, so a small
+buffer costs one round trip per write and pins transfers near 1 MB/s. Do not
+replace the copy loop with `std::io::copy`, whose buffer is 8 KiB.
+
+After touching the transfer path, run the device-gated benchmark:
+
+```bash
+RPTY_BENCH_DEVICE=wsl2-local cargo test --release --test transfer_throughput -- --nocapture
+```
+
+It is skipped when `RPTY_BENCH_DEVICE` is unset. Reference numbers for
+Mac -> wsl2-local over a 3.8 ms LAN: 200 MB push in ~6.7 s, pull in ~4.6 s.
+Raw HTTP over the same link reaches 93 MB/s while SSH tops out near 30 MB/s,
+which the paramiko backend also measures, so ~30 MB/s is the transport
+ceiling and not a defect to chase.
+
 ## Routing Constraints
 
 Do not send arbitrary Agent commands as quoted SSH strings.
