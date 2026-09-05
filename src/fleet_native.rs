@@ -4350,3 +4350,58 @@ mod exec_cmd_tests {
         assert_eq!(parsed.command, toks(&["echo", "hi"]));
     }
 }
+
+#[cfg(all(test, not(windows)))]
+mod sftp_stream_tests {
+    use super::{stream_copy, SFTP_BUFFER_BYTES};
+    use std::io::Write;
+
+    /// Records the size of every `write` it is handed, so the test can prove
+    /// the copy loop hands libssh2 large buffers instead of 8 KiB pieces.
+    struct ChunkRecorder {
+        chunks: Vec<usize>,
+        data: Vec<u8>,
+    }
+
+    impl Write for ChunkRecorder {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.chunks.push(buf.len());
+            self.data.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn stream_copy_preserves_bytes() {
+        let source: Vec<u8> = (0..300_000u32).map(|index| (index % 251) as u8).collect();
+        let mut writer = ChunkRecorder {
+            chunks: Vec::new(),
+            data: Vec::new(),
+        };
+        let copied = stream_copy(&mut source.as_slice(), &mut writer).expect("copy");
+        assert_eq!(copied, source.len() as u64);
+        assert_eq!(writer.data, source);
+    }
+
+    #[test]
+    fn stream_copy_writes_in_large_chunks() {
+        let source = vec![7u8; SFTP_BUFFER_BYTES + 1234];
+        let mut writer = ChunkRecorder {
+            chunks: Vec::new(),
+            data: Vec::new(),
+        };
+        stream_copy(&mut source.as_slice(), &mut writer).expect("copy");
+        // The old `std::io::copy` path capped every write at 8 KiB, which cost
+        // one SFTP round trip per 8 KiB and held transfers near 1 MB/s.
+        assert!(
+            writer.chunks.iter().any(|len| *len > 8 * 1024),
+            "expected writes larger than the old 8 KiB copy buffer, got {:?}",
+            writer.chunks
+        );
+        assert_eq!(writer.chunks[0], SFTP_BUFFER_BYTES);
+    }
+}
