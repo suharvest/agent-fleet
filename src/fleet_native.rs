@@ -3175,7 +3175,8 @@ fn cpu_load(value: &Value) -> f64 {
 /// time, so every write costs one full request/response round trip and the
 /// transfer runs at `8 KiB / RTT` regardless of link bandwidth. Passing a
 /// multi-megabyte buffer lets libssh2 keep the window full instead.
-pub(crate) const SFTP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(not(windows))]
+const SFTP_BUFFER_BYTES: usize = 4 * 1024 * 1024;
 
 /// Copy `reader` into `writer` using a large buffer so that SFTP writes are
 /// pipelined instead of one-round-trip-per-8-KiB.
