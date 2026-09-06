@@ -1593,7 +1593,7 @@ impl NativeFleet {
                     ));
                 }
                 let inner = shlex_join(&args.command);
-                let wsl_cmd = format!("wsl {distro_flag} -e bash -lc {}", win_quote(&inner));
+                let wsl_cmd = wsl_exec_command(&distro_flag, &inner, "bash -l");
                 let run = match ssh_exec(
                     &gateway,
                     &wsl_cmd,
@@ -3891,8 +3891,27 @@ fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn win_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+/// Build a `wsl <flags> -e <shell> -c <script>` invocation safe to send to a
+/// Windows gateway via a raw (unwrapped) SSH exec request, i.e. one that
+/// lands on the gateway's `cmd.exe`.
+///
+/// Naive double-quoting is not sufficient here: cmd.exe expands `%VAR%`
+/// even inside double-quoted segments, so a payload containing e.g.
+/// `%PATH%` would be mangled before WSL/bash ever sees it, and single
+/// quotes (used by the legacy Python backend) have no grouping meaning to
+/// cmd.exe at all (see docs/reports/wsl2-local-ssh-outage-2026-09-06.md in
+/// seeed-solutions-hub for the `unexpected EOF` failure this caused).
+/// Sending `inner` base64-encoded sidesteps both hazards: the payload is
+/// only decoded and executed after control has passed to bash on the WSL
+/// side, so cmd.exe's tokenizer never sees any of its content.
+/// `decode_shell` is the command that consumes the decoded script on stdin
+/// inside WSL (e.g. `"bash"` or `"bash -l"` to preserve login-shell
+/// semantics — profile sourcing, PATH, etc. — for the caller's original
+/// invocation).
+fn wsl_exec_command(distro_flag: &str, inner: &str, decode_shell: &str) -> String {
+    use base64::Engine;
+    let payload = base64::engine::general_purpose::STANDARD.encode(inner.as_bytes());
+    format!(r#"wsl {distro_flag} -e bash -c "echo {payload} | base64 -d | {decode_shell}""#)
 }
 
 fn ps_quote(value: &str) -> String {
@@ -4019,7 +4038,74 @@ fn push_row(out: &mut String, row: &[String], widths: &[usize]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_md5, parse_list_args, NativeFleet};
+    use super::{local_md5, parse_list_args, wsl_exec_command, NativeFleet};
+
+    fn decode_payload(built: &str) -> String {
+        use base64::Engine;
+        let start = built.find("echo ").expect("no echo prefix") + "echo ".len();
+        let rest = &built[start..];
+        let end = rest.find(" |").expect("no pipe after payload");
+        let payload = &rest[..end];
+        String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .expect("payload is not valid base64"),
+        )
+        .expect("decoded payload is not utf-8")
+    }
+
+    fn cmd_exe_would_mangle(built: &str) -> bool {
+        // Simplified model of the two cmd.exe hazards this fix defends
+        // against: single quotes have no grouping meaning to cmd.exe, and
+        // `%NAME%` is expanded even inside double-quoted segments.
+        if built.contains('\'') {
+            return true;
+        }
+        let bytes = built.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' {
+                if let Some(rel) = built[i + 1..].find('%') {
+                    let name = &built[i + 1..i + 1 + rel];
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        return true;
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    #[test]
+    fn wsl_exec_command_round_trips_payload() {
+        for payload in [
+            "sudo service ssh start; echo WSL_STARTED",
+            "echo it's fine",
+            "echo \"quoted\"",
+            "echo $HOME and $(id -u)",
+            "echo %PATH% and %USERPROFILE%",
+            "echo hello world with spaces",
+            "printf 'a|b & c > d < e ^ f'",
+        ] {
+            let built = wsl_exec_command("-d Ubuntu", payload, "bash -l");
+            assert_eq!(decode_payload(&built), payload);
+            assert!(
+                !cmd_exe_would_mangle(&built),
+                "unsafe for cmd.exe: {built:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_exec_command_preserves_login_shell_for_decode() {
+        let built = wsl_exec_command("-d Ubuntu", "echo ok", "bash -l");
+        assert!(built.ends_with("| bash -l\""));
+    }
 
     fn write_fixture(name: &str, content: &str) -> std::path::PathBuf {
         let dir =

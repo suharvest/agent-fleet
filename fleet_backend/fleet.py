@@ -6,6 +6,7 @@ import sys
 import stat
 import shlex
 import shutil
+import base64
 import argparse
 import subprocess
 import paramiko
@@ -188,6 +189,29 @@ def wrap_remote_command(command, sudo=False, raw=False, windows=False):
 def build_remote_command(tokens, literal=False, shell=False, sudo=False, raw=False, windows=False):
     """Full pipeline: join the `--` tokens, then wrap them for the remote shell."""
     return wrap_remote_command(join_exec_command(tokens, literal, shell), sudo, raw, windows)
+
+
+def wsl_exec_command(distro_flag, inner, shell="bash"):
+    """Build a `wsl <flags> -e <shell> -c <script>` invocation that is safe
+    to send to a Windows gateway via `ssh_exec(..., raw=True)`.
+
+    `raw=True` hands the string straight to the gateway's `cmd.exe`, which
+    creates two hazards for an arbitrary POSIX command embedded inline:
+
+    1. Single quotes have no grouping meaning to cmd.exe — `bash -c '...'`
+       only ever receives the leading `'` as its argument and the rest is
+       split on whitespace, producing `unexpected EOF while looking for
+       matching \'\'` (see docs/reports/wsl2-local-ssh-outage-2026-09-06.md).
+    2. Even inside double quotes, cmd.exe expands `%VAR%` before the
+       command ever reaches WSL, so double-quoting alone is not sufficient
+       either.
+
+    Sending `inner` base64-encoded sidesteps both: the payload is decoded
+    and executed only after control has passed to bash on the WSL side, so
+    nothing about its content is ever visible to cmd.exe's tokenizer.
+    """
+    payload = base64.b64encode(inner.encode("utf-8")).decode("ascii")
+    return f'wsl {distro_flag} -e {shell} -c "echo {payload} | base64 -d | {shell}"'
 
 
 def has_trailing_ampersand(command):
@@ -1194,7 +1218,7 @@ def cmd_wsl(args):
 
         # Launch WSL so sshd starts
         print(f"[fleet] Starting WSL (launching sshd)...")
-        start_cmd = f"wsl {distro_flag} -e bash -c 'sudo service ssh start; echo WSL_STARTED'"
+        start_cmd = wsl_exec_command(distro_flag, "sudo service ssh start; echo WSL_STARTED")
         ok, out = ssh_exec(gw_host, gw_user, gw_pass, start_cmd, port=gw_port, raw=True, timeout=30)
         print(out)
 
@@ -1210,7 +1234,7 @@ def cmd_wsl(args):
                 break
         else:
             print(f"[fleet] {target} did not come back online in 60s — check manually", file=sys.stderr)
-            print(f"  Manual: fleet exec --raw {gw_name} -- wsl {distro_flag} -e bash -c 'sudo service ssh start'", file=sys.stderr)
+            print(f"  Manual: fleet exec --raw {gw_name} -- {wsl_exec_command(distro_flag, 'sudo service ssh start')}", file=sys.stderr)
             sys.exit(1)
 
     elif action == "exec":
@@ -1221,7 +1245,7 @@ def cmd_wsl(args):
             print("Error: no command specified. Usage: fleet wsl <device> exec -- <cmd>", file=sys.stderr)
             sys.exit(1)
         inner = shlex.join(cmd_parts)
-        wsl_cmd = f"wsl {distro_flag} -e bash -c {shlex.quote(inner)}"
+        wsl_cmd = wsl_exec_command(distro_flag, inner)
         print(f"[fleet] Running via {gw_name} → WSL: {wsl_cmd}")
         ok, out = ssh_exec(gw_host, gw_user, gw_pass, wsl_cmd, port=gw_port, raw=True, timeout=args.timeout)
         print(out)
