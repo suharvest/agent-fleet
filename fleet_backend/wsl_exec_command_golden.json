@@ -1,0 +1,191 @@
+[
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "sudo service ssh start; echo WSL_STARTED",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s c3VkbyBzZXJ2aWNlIHNzaCBzdGFydDsgZWNobyBXU0xfU1RBUlRFRA== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo it's fine",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyBpdCdzIGZpbmU= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo \"quoted\"",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyAicXVvdGVkIg== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo $HOME and $(id -u)",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyAkSE9NRSBhbmQgJChpZCAtdSk= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo %PATH% and %USERPROFILE%",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyAlUEFUSCUgYW5kICVVU0VSUFJPRklMRSU= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo hello world with spaces",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyBoZWxsbyB3b3JsZCB3aXRoIHNwYWNlcw== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "printf 'a|b & c > d < e ^ f'",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s cHJpbnRmICdhfGIgJiBjID4gZCA8IGUgXiBmJw== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo line1\necho line2\necho line3",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyBsaW5lMQplY2hvIGxpbmUyCmVjaG8gbGluZTM= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo 你好世界 && echo 日本語",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -d Ubuntu -e bash -c \"f=$(mktemp) && printf %s ZWNobyDkvaDlpb3kuJbnlYwgJiYgZWNobyDml6XmnKzoqp4= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "sudo service ssh start; echo WSL_STARTED",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s c3VkbyBzZXJ2aWNlIHNzaCBzdGFydDsgZWNobyBXU0xfU1RBUlRFRA== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo it's fine",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyBpdCdzIGZpbmU= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo \"quoted\"",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyAicXVvdGVkIg== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo $HOME and $(id -u)",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyAkSE9NRSBhbmQgJChpZCAtdSk= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo %PATH% and %USERPROFILE%",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyAlUEFUSCUgYW5kICVVU0VSUFJPRklMRSU= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo hello world with spaces",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyBoZWxsbyB3b3JsZCB3aXRoIHNwYWNlcw== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "printf 'a|b & c > d < e ^ f'",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s cHJpbnRmICdhfGIgJiBjID4gZCA8IGUgXiBmJw== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo line1\necho line2\necho line3",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyBsaW5lMQplY2hvIGxpbmUyCmVjaG8gbGluZTM= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "",
+    "inner": "echo 你好世界 && echo 日本語",
+    "decode_shell": "bash -l",
+    "user_flag": "",
+    "expected": "wsl -e bash -c \"f=$(mktemp) && printf %s ZWNobyDkvaDlpb3kuJbnlYwgJiYgZWNobyDml6XmnKzoqp4= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "sudo service ssh start; echo WSL_STARTED",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s c3VkbyBzZXJ2aWNlIHNzaCBzdGFydDsgZWNobyBXU0xfU1RBUlRFRA== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo it's fine",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyBpdCdzIGZpbmU= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo \"quoted\"",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyAicXVvdGVkIg== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo $HOME and $(id -u)",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyAkSE9NRSBhbmQgJChpZCAtdSk= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo %PATH% and %USERPROFILE%",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyAlUEFUSCUgYW5kICVVU0VSUFJPRklMRSU= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo hello world with spaces",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyBoZWxsbyB3b3JsZCB3aXRoIHNwYWNlcw== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "printf 'a|b & c > d < e ^ f'",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s cHJpbnRmICdhfGIgJiBjID4gZCA8IGUgXiBmJw== | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo line1\necho line2\necho line3",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyBsaW5lMQplY2hvIGxpbmUyCmVjaG8gbGluZTM= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  },
+  {
+    "distro_flag": "-d Ubuntu",
+    "inner": "echo 你好世界 && echo 日本語",
+    "decode_shell": "bash -l",
+    "user_flag": "-u root",
+    "expected": "wsl -d Ubuntu -u root -e bash -c \"f=$(mktemp) && printf %s ZWNobyDkvaDlpb3kuJbnlYwgJiYgZWNobyDml6XmnKzoqp4= | base64 -d > $f && bash -l $f; rc=$?; rm -f $f; exit $rc\""
+  }
+]
