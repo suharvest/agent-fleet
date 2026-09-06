@@ -2,6 +2,7 @@
 """fleet — Local cluster management CLI for edge devices."""
 import json
 import os
+import re
 import sys
 import stat
 import shlex
@@ -21,6 +22,10 @@ DEVICES_FILE = (
 )
 SSH_TIMEOUT = 5
 CMD_TIMEOUT = 10
+# cmd.exe's command-line length limit is 8191 chars. Leave headroom for the
+# `wsl ... -e bash -c "..."` wrapper (distro/user flags + script scaffolding)
+# around the base64 payload.
+MAX_WSL_B64_LEN = 7000
 
 
 def load_devices():
@@ -191,9 +196,9 @@ def build_remote_command(tokens, literal=False, shell=False, sudo=False, raw=Fal
     return wrap_remote_command(join_exec_command(tokens, literal, shell), sudo, raw, windows)
 
 
-def wsl_exec_command(distro_flag, inner, shell="bash"):
-    """Build a `wsl <flags> -e <shell> -c <script>` invocation that is safe
-    to send to a Windows gateway via `ssh_exec(..., raw=True)`.
+def wsl_exec_command(distro_flag, inner, decode_shell="bash -l", user_flag=""):
+    """Build a `wsl <flags> -e bash -c <script>` invocation that is safe to
+    send to a Windows gateway via `ssh_exec(..., raw=True)`.
 
     `raw=True` hands the string straight to the gateway's `cmd.exe`, which
     creates two hazards for an arbitrary POSIX command embedded inline:
@@ -209,9 +214,41 @@ def wsl_exec_command(distro_flag, inner, shell="bash"):
     Sending `inner` base64-encoded sidesteps both: the payload is decoded
     and executed only after control has passed to bash on the WSL side, so
     nothing about its content is ever visible to cmd.exe's tokenizer.
+
+    The decoded payload is written to a temp file and run as a script
+    (`{decode_shell} $f`), NOT piped into a shell's stdin (`... | bash`).
+    Piping would make the decode pipeline's output *become* the inner
+    shell's stdin, silently stealing it from whatever command `inner`
+    itself wants to read from stdin. Running from a file also means a
+    `base64 -d` failure fails the `&&` chain before the script ever runs,
+    instead of being masked by the final stage's exit status, and stderr
+    from every stage reaches the real stderr untouched.
+
+    A second nested `bash -c "$(...)"` layer (to avoid the temp file) was
+    tried and rejected: cmd.exe's quote handling does not compose with a
+    second, nested pair of double quotes — verified against the real
+    wsl2-local gateway, where it produced a mis-tokenized command line
+    (`'base64' is not recognized...`) instead of reaching WSL at all.
+
+    Raises ValueError if the base64-encoded payload would push the overall
+    command line past cmd.exe's ~8191-char limit.
     """
     payload = base64.b64encode(inner.encode("utf-8")).decode("ascii")
-    return f'wsl {distro_flag} -e {shell} -c "echo {payload} | base64 -d | {shell}"'
+    if len(payload) > MAX_WSL_B64_LEN:
+        raise ValueError(
+            f"command is too long once base64-encoded ({len(payload)} > "
+            f"{MAX_WSL_B64_LEN} chars) to fit in cmd.exe's command-line limit. "
+            f"Use `fleet push` to stage a script on the device and run it "
+            f"with a short `fleet wsl ... exec -- bash /path/to/script.sh` "
+            f"instead of passing the whole command inline."
+        )
+    flags = " ".join(f for f in (distro_flag, user_flag) if f)
+    prefix = f"wsl {flags} -e" if flags else "wsl -e"
+    script = (
+        f"f=$(mktemp) && printf %s {payload} | base64 -d > $f "
+        f"&& {decode_shell} $f; rc=$?; rm -f $f; exit $rc"
+    )
+    return f'{prefix} bash -c "{script}"'
 
 
 def has_trailing_ampersand(command):
@@ -349,6 +386,12 @@ def ssh_exec(host, user, password, command, timeout=CMD_TIMEOUT, sudo=False, por
                 if "permission denied" in combined or "not allowed" in combined or "are you root" in combined:
                     hint = "\n[fleet] Hint: this command likely needs --sudo. Retry with: fleet exec --sudo <device> -- <command>"
                 return False, f"[fleet] command failed (exit {exit_code}): {detail}{hint}"
+            # A zero exit code doesn't mean stderr was empty (e.g. a base64
+            # decode warning, or any command that writes diagnostics to
+            # stderr but still succeeds) — surface it instead of discarding
+            # it, matching how the sudo/stream branches already behave.
+            if err_output:
+                print(err_output, file=sys.stderr)
             return True, output
     except Exception as e:
         return False, str(e)
@@ -1189,7 +1232,14 @@ def cmd_wsl(args):
 
     gw = devices[gw_name]
     distro = args.distro or dev.get("wsl_distro", "")
+    wsl_user = args.wsl_user or ""
+    for label, value in (("--distro", distro), ("--wsl-user", wsl_user)):
+        if value and not re.match(r"^[A-Za-z0-9._-]+$", value):
+            print(f"Error: {label} value {value!r} contains characters unsafe to pass through "
+                  f"cmd.exe unquoted (only letters, digits, '.', '_', '-' allowed)", file=sys.stderr)
+            sys.exit(1)
     distro_flag = f"-d {distro}" if distro else ""
+    user_flag = f"-u {wsl_user}" if wsl_user else ""
 
     gw_host = gw.get("host", "")
     gw_user = gw.get("user", "")
@@ -1218,7 +1268,11 @@ def cmd_wsl(args):
 
         # Launch WSL so sshd starts
         print(f"[fleet] Starting WSL (launching sshd)...")
-        start_cmd = wsl_exec_command(distro_flag, "sudo service ssh start; echo WSL_STARTED")
+        try:
+            start_cmd = wsl_exec_command(distro_flag, "sudo service ssh start; echo WSL_STARTED", user_flag=user_flag)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         ok, out = ssh_exec(gw_host, gw_user, gw_pass, start_cmd, port=gw_port, raw=True, timeout=30)
         print(out)
 
@@ -1234,7 +1288,7 @@ def cmd_wsl(args):
                 break
         else:
             print(f"[fleet] {target} did not come back online in 60s — check manually", file=sys.stderr)
-            print(f"  Manual: fleet exec --raw {gw_name} -- {wsl_exec_command(distro_flag, 'sudo service ssh start')}", file=sys.stderr)
+            print(f"  Manual: fleet exec --raw {gw_name} -- {wsl_exec_command(distro_flag, 'sudo service ssh start', user_flag=user_flag)}", file=sys.stderr)
             sys.exit(1)
 
     elif action == "exec":
@@ -1245,7 +1299,11 @@ def cmd_wsl(args):
             print("Error: no command specified. Usage: fleet wsl <device> exec -- <cmd>", file=sys.stderr)
             sys.exit(1)
         inner = shlex.join(cmd_parts)
-        wsl_cmd = wsl_exec_command(distro_flag, inner)
+        try:
+            wsl_cmd = wsl_exec_command(distro_flag, inner, user_flag=user_flag)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
         print(f"[fleet] Running via {gw_name} → WSL: {wsl_cmd}")
         ok, out = ssh_exec(gw_host, gw_user, gw_pass, wsl_cmd, port=gw_port, raw=True, timeout=args.timeout)
         print(out)
@@ -2344,6 +2402,7 @@ def main():
     p_wsl.add_argument("wsl_action", choices=["status", "restart", "exec"],
                        help="status: show WSL state; restart: terminate+relaunch WSL and wait for SSH; exec: run command inside WSL via gateway")
     p_wsl.add_argument("--distro", help="WSL distro name (overrides wsl_distro from devices.json)")
+    p_wsl.add_argument("--wsl-user", dest="wsl_user", help="Run as this user inside WSL (passed as `wsl -u <user>`); default is WSL's configured default user")
     p_wsl.add_argument("--timeout", type=int, default=60, help="Command timeout for exec action (seconds)")
     p_wsl.add_argument("cmd_args", nargs=argparse.REMAINDER, help="Command for exec action (after --)")
 
