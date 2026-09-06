@@ -16,12 +16,12 @@ path = "src/main.rs"
 
 [dependencies]
 md5 = "0.7"
+base64 = "0.22"
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [target.'cfg(not(windows))'.dependencies]
 ssh2 = "0.9"
 
 [target.'cfg(windows)'.dependencies]
-base64 = "0.22"
 russh = { version = "0.62.1", default-features = false, features = ["flate2", "ring", "rsa"] }
 tokio = { version = "1", features = ["fs", "io-util", "rt-multi-thread", "time"] }

@@ -12,6 +12,11 @@ use serde_json::{json, Map, Value};
 use crate::fleet::Captured;
 
 const NATIVE_FALLBACK: &str = "__RPTY_NATIVE_FALLBACK__";
+/// cmd.exe's command-line length limit is 8191 chars. Leave headroom for the
+/// `wsl ... -e bash -c "..."` wrapper (distro/user flags + script
+/// scaffolding) around the base64 payload. Mirrors fleet_backend/fleet.py's
+/// MAX_WSL_B64_LEN — keep both in sync.
+const MAX_WSL_B64_LEN: usize = 7000;
 const EXCLUDE_ALWAYS: &[&str] = &[
     ".git/",
     "node_modules/",
@@ -191,6 +196,7 @@ struct WslArgs {
     device: String,
     action: String,
     distro: Option<String>,
+    wsl_user: Option<String>,
     timeout: u64,
     command: Vec<String>,
 }
@@ -1555,10 +1561,38 @@ impl NativeFleet {
             .distro
             .or_else(|| target.wsl_distro.clone())
             .unwrap_or_default();
+        let wsl_user = args.wsl_user.clone().unwrap_or_default();
+        // `distro`/`wsl_user` are embedded unquoted into a `wsl` flag that
+        // is itself embedded in a cmd.exe command line (see
+        // wsl_exec_command) — POSIX quoting (sh_quote) has no meaning to
+        // cmd.exe and was a latent bug (a distro/user name with a `'` would
+        // pass a literal quote character to wsl.exe). Since WSL distro and
+        // Linux usernames never legitimately need shell-special characters,
+        // reject anything outside a safe charset instead of quoting it.
+        for (label, value) in [("--distro", &distro), ("--wsl-user", &wsl_user)] {
+            if !value.is_empty()
+                && !value
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            {
+                return Ok(cli_error(
+                    format!(
+                        "Error: {label} value {value:?} contains characters unsafe to pass \
+                         through cmd.exe unquoted (only letters, digits, '.', '_', '-' allowed)"
+                    ),
+                    1,
+                ));
+            }
+        }
         let distro_flag = if distro.is_empty() {
             String::new()
         } else {
-            format!("-d {}", sh_quote(&distro))
+            format!("-d {distro}")
+        };
+        let user_flag = if wsl_user.is_empty() {
+            String::new()
+        } else {
+            format!("-u {wsl_user}")
         };
         match args.action.as_str() {
             "status" => {
@@ -1593,7 +1627,10 @@ impl NativeFleet {
                     ));
                 }
                 let inner = shlex_join(&args.command);
-                let wsl_cmd = format!("wsl {distro_flag} -e bash -lc {}", win_quote(&inner));
+                let wsl_cmd = match wsl_exec_command(&distro_flag, &inner, "bash -l", &user_flag) {
+                    Ok(cmd) => cmd,
+                    Err(err) => return Ok(cli_error(format!("Error: {err}"), 1)),
+                };
                 let run = match ssh_exec(
                     &gateway,
                     &wsl_cmd,
@@ -2353,6 +2390,7 @@ fn parse_wsl_args(args: &[String]) -> Result<WslArgs, String> {
     let mut device = None;
     let mut action = None;
     let mut distro = None;
+    let mut wsl_user = None;
     let mut timeout = 60;
     let mut index = 0;
     while index < args.len() {
@@ -2363,6 +2401,14 @@ fn parse_wsl_args(args: &[String]) -> Result<WslArgs, String> {
                     args,
                     index,
                     "fleet wsl: --distro requires a value",
+                )?);
+            }
+            "--wsl-user" => {
+                index += 1;
+                wsl_user = Some(required_value(
+                    args,
+                    index,
+                    "fleet wsl: --wsl-user requires a value",
                 )?);
             }
             "--timeout" => {
@@ -2382,6 +2428,7 @@ fn parse_wsl_args(args: &[String]) -> Result<WslArgs, String> {
                     device: device.unwrap(),
                     action: action.unwrap(),
                     distro,
+                    wsl_user,
                     timeout,
                     command: args[index..].to_vec(),
                 });
@@ -2394,6 +2441,7 @@ fn parse_wsl_args(args: &[String]) -> Result<WslArgs, String> {
         device: device.ok_or_else(|| "fleet wsl: device is required".to_string())?,
         action: action.unwrap_or_else(|| "status".to_string()),
         distro,
+        wsl_user,
         timeout,
         command: Vec::new(),
     })
@@ -2780,7 +2828,7 @@ fn ssh_exec(
     let stderr = decode_remote(&stderr_bytes);
     if exit != 0 && !stderr.trim().is_empty() {
         if output.trim().is_empty() {
-            output = stderr;
+            output = stderr.clone();
         } else {
             output = format!("{}\n{}", stderr.trim(), output.trim());
         }
@@ -2814,6 +2862,13 @@ fn ssh_exec(
             success: false,
             output: format!("[fleet] command failed (exit {exit}): {detail}"),
         });
+    }
+    // A zero exit code doesn't mean stderr was empty (e.g. any command that
+    // writes diagnostics to stderr but still succeeds) — surface it instead
+    // of silently discarding it (it was already merged into `output` above
+    // for the exit != 0 case; mirror that here for the caller's terminal).
+    if !stderr.trim().is_empty() {
+        eprintln!("{}", stderr.trim());
     }
     Ok(RemoteRun {
         success: true,
@@ -3891,8 +3946,79 @@ fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-fn win_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+/// Build a `wsl <flags> -e bash -c <script>` invocation safe to send to a
+/// Windows gateway via a raw (unwrapped) SSH exec request, i.e. one that
+/// lands on the gateway's `cmd.exe`.
+///
+/// Naive double-quoting is not sufficient here: cmd.exe expands `%VAR%`
+/// even inside double-quoted segments, so a payload containing e.g.
+/// `%PATH%` would be mangled before WSL/bash ever sees it, and single
+/// quotes (used by the legacy Python backend) have no grouping meaning to
+/// cmd.exe at all (see docs/reports/wsl2-local-ssh-outage-2026-09-06.md in
+/// seeed-solutions-hub for the `unexpected EOF` failure this caused).
+/// Sending `inner` base64-encoded sidesteps both hazards: the payload is
+/// only decoded and executed after control has passed to bash on the WSL
+/// side, so cmd.exe's tokenizer never sees any of its content.
+///
+/// The decoded payload is written to a temp file and run as a script
+/// (`{decode_shell} $f`), NOT piped into a shell's stdin (`... | bash`).
+/// Piping would make the decode pipeline's output *become* the inner
+/// shell's stdin, silently stealing it from whatever `inner` itself wants
+/// to read from stdin. Running from a file also means a `base64 -d`
+/// failure fails the `&&` chain before the script ever runs, instead of
+/// being masked by the final stage's exit status, and stderr from every
+/// stage reaches the real stderr untouched. This mirrors
+/// fleet_backend/fleet.py's `wsl_exec_command` byte-for-byte — keep both in
+/// sync (see the cross-language golden test below).
+///
+/// A second nested `bash -c "$(...)"` layer (to avoid the temp file) was
+/// tried and rejected: cmd.exe's quote handling does not compose with a
+/// second, nested pair of double quotes — verified against the real
+/// wsl2-local gateway, where it produced a mis-tokenized command line
+/// (`'base64' is not recognized...`) instead of reaching WSL at all.
+///
+/// `decode_shell` is the command that runs the decoded script file inside
+/// WSL (e.g. `"bash"` or `"bash -l"` to preserve login-shell semantics —
+/// profile sourcing, PATH, etc. — for the caller's original invocation).
+/// `user_flag` is an already-formatted `-u <name>` (or empty string),
+/// appended after `distro_flag` — the caller decides whether to pass one,
+/// so Python and Rust behave identically either way (previously neither
+/// backend passed one, so `wsl -e` always ran as WSL's configured default
+/// user regardless of what the SSH gateway login user was).
+///
+/// Returns `Err` if the base64-encoded payload would push the overall
+/// command line past cmd.exe's ~8191-char limit.
+fn wsl_exec_command(
+    distro_flag: &str,
+    inner: &str,
+    decode_shell: &str,
+    user_flag: &str,
+) -> Result<String, String> {
+    use base64::Engine;
+    let payload = base64::engine::general_purpose::STANDARD.encode(inner.as_bytes());
+    if payload.len() > MAX_WSL_B64_LEN {
+        return Err(format!(
+            "command is too long once base64-encoded ({} > {} chars) to fit in \
+             cmd.exe's command-line limit. Use `fleet push` to stage a script on \
+             the device and run it with a short `fleet wsl ... exec -- bash \
+             /path/to/script.sh` instead of passing the whole command inline.",
+            payload.len(),
+            MAX_WSL_B64_LEN
+        ));
+    }
+    let flags: Vec<&str> = [distro_flag, user_flag]
+        .into_iter()
+        .filter(|f| !f.is_empty())
+        .collect();
+    let prefix = if flags.is_empty() {
+        "wsl -e".to_string()
+    } else {
+        format!("wsl {} -e", flags.join(" "))
+    };
+    let script = format!(
+        "f=$(mktemp) && printf %s {payload} | base64 -d > $f && {decode_shell} $f; rc=$?; rm -f $f; exit $rc"
+    );
+    Ok(format!(r#"{prefix} bash -c "{script}""#))
 }
 
 fn ps_quote(value: &str) -> String {
@@ -4019,7 +4145,163 @@ fn push_row(out: &mut String, row: &[String], widths: &[usize]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_md5, parse_list_args, NativeFleet};
+    use super::{local_md5, parse_list_args, wsl_exec_command, NativeFleet, MAX_WSL_B64_LEN};
+
+    fn extract_inner_script(built: &str) -> &str {
+        let marker = "-e bash -c \"";
+        let start = built.find(marker).expect("no bash -c wrapper") + marker.len();
+        let rest = &built[start..];
+        rest.strip_suffix('"').expect("script not closed with \"")
+    }
+
+    fn decode_payload(built: &str) -> String {
+        use base64::Engine;
+        let script = extract_inner_script(built);
+        let start = script.find("printf %s ").expect("no printf prefix") + "printf %s ".len();
+        let rest = &script[start..];
+        let end = rest.find(" |").expect("no pipe after payload");
+        let payload = &rest[..end];
+        String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .expect("payload is not valid base64"),
+        )
+        .expect("decoded payload is not utf-8")
+    }
+
+    fn cmd_exe_would_mangle(built: &str) -> bool {
+        // Simplified model of the two cmd.exe hazards this fix defends
+        // against: single quotes have no grouping meaning to cmd.exe, and
+        // `%NAME%` is expanded even inside double-quoted segments.
+        if built.contains('\'') {
+            return true;
+        }
+        let bytes = built.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' {
+                if let Some(rel) = built[i + 1..].find('%') {
+                    let name = &built[i + 1..i + 1 + rel];
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        return true;
+                    }
+                }
+            }
+            i += 1;
+        }
+        false
+    }
+
+    const CASES: &[&str] = &[
+        "sudo service ssh start; echo WSL_STARTED",
+        "echo it's fine",
+        "echo \"quoted\"",
+        "echo $HOME and $(id -u)",
+        "echo %PATH% and %USERPROFILE%",
+        "echo hello world with spaces",
+        "printf 'a|b & c > d < e ^ f'",
+        "echo line1\necho line2\necho line3",
+        "echo 你好世界 && echo 日本語",
+    ];
+
+    #[test]
+    fn wsl_exec_command_round_trips_payload() {
+        for payload in CASES {
+            let built = wsl_exec_command("-d Ubuntu", payload, "bash -l", "").unwrap();
+            assert_eq!(decode_payload(&built), *payload);
+            assert!(
+                !cmd_exe_would_mangle(&built),
+                "unsafe for cmd.exe: {built:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_exec_command_preserves_login_shell_for_decode() {
+        let built = wsl_exec_command("-d Ubuntu", "echo ok", "bash -l", "").unwrap();
+        let script = extract_inner_script(&built);
+        assert!(script.contains("bash -l $f"));
+    }
+
+    #[test]
+    fn wsl_exec_command_does_not_pipe_into_a_shells_stdin() {
+        // Piping the decoded script into a shell (`| bash`) makes that
+        // pipe's output *become* the shell's stdin, stealing it from
+        // whatever `inner` itself wants to read. The fix writes to a temp
+        // file and runs it as a script argument instead.
+        let built = wsl_exec_command("-d Ubuntu", "cat", "bash -l", "").unwrap();
+        let script = extract_inner_script(&built);
+        assert!(!script.contains("| bash"), "still piping into a shell: {script:?}");
+        assert!(script.contains("base64 -d >"));
+    }
+
+    #[test]
+    fn wsl_exec_command_decode_failure_is_not_masked_by_a_later_stage() {
+        let built = wsl_exec_command("-d Ubuntu", "echo ok", "bash -l", "").unwrap();
+        let script = extract_inner_script(&built);
+        let (setup, rest) = script.rsplit_once("&&").expect("no && chain");
+        assert!(setup.contains("base64 -d >"));
+        assert!(rest.contains("bash"));
+    }
+
+    #[test]
+    fn wsl_exec_command_appends_user_flag_consistently() {
+        let built = wsl_exec_command("-d Ubuntu", "echo ok", "bash -l", "-u root").unwrap();
+        assert!(built.starts_with("wsl -d Ubuntu -u root -e bash -c "));
+
+        let built_no_user = wsl_exec_command("-d Ubuntu", "echo ok", "bash -l", "").unwrap();
+        let prefix = built_no_user.split('"').next().unwrap();
+        assert!(!prefix.contains("  "), "stray double space in {prefix:?}");
+    }
+
+    #[test]
+    fn wsl_exec_command_rejects_overlong_payload_before_cmd_exe_overflow() {
+        let too_long = "x".repeat(MAX_WSL_B64_LEN * 2);
+        let err = wsl_exec_command("-d Ubuntu", &too_long, "bash -l", "")
+            .expect_err("expected overlong payload to be rejected");
+        assert!(err.contains("base64") || err.contains("cmd.exe"));
+
+        // Right at the boundary must still be accepted. base64 expands raw
+        // bytes by ~4/3, so size the raw input accordingly.
+        let raw_len = (MAX_WSL_B64_LEN - 100) * 3 / 4;
+        let ok_payload = "x".repeat(raw_len);
+        wsl_exec_command("-d Ubuntu", &ok_payload, "bash -l", "")
+            .expect("boundary-sized payload must be accepted");
+    }
+
+    /// Cross-language golden test: for the same (distro_flag, inner,
+    /// decode_shell, user_flag) tuple, Rust's wsl_exec_command must produce
+    /// a byte-for-byte identical remote command string to Python's. The
+    /// fixture is generated by fleet_backend/test_wsl_quoting.py
+    /// (test_write_rust_golden_fixture) and checked in at
+    /// fleet_backend/wsl_exec_command_golden.json.
+    #[test]
+    fn wsl_exec_command_matches_python_backend_byte_for_byte() {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fleet_backend/wsl_exec_command_golden.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|e| panic!("failed to read {fixture_path:?}: {e}"));
+        let cases: Vec<serde_json::Value> =
+            serde_json::from_str(&raw).expect("golden fixture is not valid JSON");
+        assert!(!cases.is_empty(), "golden fixture is empty");
+        for case in cases {
+            let distro_flag = case["distro_flag"].as_str().unwrap();
+            let inner = case["inner"].as_str().unwrap();
+            let decode_shell = case["decode_shell"].as_str().unwrap();
+            let user_flag = case["user_flag"].as_str().unwrap();
+            let expected = case["expected"].as_str().unwrap();
+            let built = wsl_exec_command(distro_flag, inner, decode_shell, user_flag)
+                .unwrap_or_else(|e| panic!("Rust build failed for case {case:?}: {e}"));
+            assert_eq!(
+                built, expected,
+                "Rust/Python mismatch for inner={inner:?}"
+            );
+        }
+    }
 
     fn write_fixture(name: &str, content: &str) -> std::path::PathBuf {
         let dir =
