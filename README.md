@@ -34,6 +34,7 @@ fleet run --host radxa -- 'echo "$PWD $TARGET"'
 - [Quickstart](#quickstart)
 - [Installation](#installation)
 - [Agent Workflow](#agent-workflow)
+- [Bash Shim](#bash-shim)
 - [Device Modes](#device-modes)
 - [Configuration](#configuration)
 - [How It Works](#how-it-works)
@@ -65,6 +66,9 @@ single command elsewhere with `fleet run --host <device> -- <cmd>`.
 
 - **Direct agent entrypoints**: launch `codex`, `claude`, or `opencode`
   directly; the shim creates an isolated `RPTY_SESSION`.
+- **Opt-in bash shim**: the `bash` command shim is only installed when asked
+  for (`install-shim` or `install --with-bash-shim`); a default install leaves
+  the real `bash` untouched.
 - **Persistent remote shell state**: cwd, env vars, virtualenvs, and shell
   context survive across commands on each device.
 - **Multi-device workflow**: one agent session can move between `radxa`,
@@ -134,9 +138,11 @@ cargo run --bin fleet -- doctor --fix --write-shell-profile
 `doctor --fix --write-shell-profile` installs:
 
 - `~/.rpty/bin/fleet-router`
-- `fleet`, `rpty`, and `bash` command shims
+- `fleet` and `rpty` command shims
 - direct agent shims for discovered commands: `codex`, `claude`, `opencode`
 - a shell profile PATH entry
+
+The `bash` shim is not installed by default; see [Bash Shim](#bash-shim).
 
 If the current shell needs the PATH immediately:
 
@@ -190,6 +196,47 @@ Use:
 - `fleet cleanup [device]` when the remote PTY session should be destroyed.
 - `fleet exec --detach` for long non-interactive jobs; PTY mode is for shell
   state, not just command duration.
+
+## Bash Shim
+
+The `bash` shim is opt-in. A default install creates only the `fleet` and `rpty`
+shims:
+
+```bash
+fleet install                     # fleet + rpty, no bash shim
+fleet install --with-bash-shim    # fleet + rpty + bash
+fleet install-shim                # add the bash shim on its own
+fleet uninstall-shim              # remove it
+fleet doctor                      # prints: bash shim: installed | not installed
+```
+
+`doctor --fix` follows the same rule: it never creates the bash shim unless
+`--with-bash-shim` is passed, and it never removes an existing one. Removal is
+always the explicit `uninstall-shim` command, which refuses to touch a file that
+is not the Fleet shim.
+
+Why it is off by default: the shim directory sits on `PATH` for every process,
+so a `bash` link there intercepts `bash` for everything the user runs, not just
+Agent calls. Routing is already gated per session, but leaving the link out
+entirely keeps `bash` untouched on machines that never opted in.
+
+When invoked as `bash`, the binary intercepts common Agent calls:
+
+```bash
+bash -lc '<cmd>'
+bash -c '<cmd>'
+```
+
+and routes them to the current host. Unsupported bash calls fall back to
+`/bin/bash`. Use `RPTY_BASH_PASSTHROUGH=1` to force local bash.
+
+Interception is opt-in per session. The shim routes only when `RPTY_SESSION`
+is set and that session ran `use <device>`; it never falls back to the global
+`current_host`. `fleet where` reports the routing state; `fleet unuse` clears
+the current host and returns the session to local bash.
+
+Claude Code's Bash tool runs commands in `/bin/zsh` and does not call `bash`, so
+it never goes through the shim; use `fleet run` or `fleet exec` there.
 
 ## Device Modes
 

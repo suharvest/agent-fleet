@@ -36,10 +36,17 @@ python another_step.py
 fleet env
 ```
 
-After `fleet use <device>`, the installed bash shim routes shell calls made as
+After `fleet use <device>`, the bash shim routes shell calls made as
 `bash -lc` / `bash -c` to the current device. Use `fleet run -- <cmd>` when an
 explicit wrapper is clearer, and `fleet run --host <device> -- <cmd>` for one
 command on another device.
+
+> bash shim 默认**不安装**：`fleet install` 与 `fleet doctor --fix` 只建
+> `fleet` / `rpty`，装 bash shim 要显式加 `--with-bash-shim` 或跑
+> `fleet install-shim`；卸载用 `fleet uninstall-shim`（拒绝删除非本工具的
+> 同名文件）。`fleet doctor` 会打印 `bash shim: installed` 或
+> `bash shim: not installed`。理由：shim 目录在每个进程的 PATH 上，装了就是
+> 全局拦截 `bash`，不装则完全不影响未 opt-in 的 shell。
 
 > ⚠️ **Claude Code 不走 bash shim。** 它的 Bash 工具在 `/bin/zsh` 里执行命令，
 > 从不调用 `bash`，所以 shim 看不到这些调用。**即使 `fleet where` 显示已路由到
@@ -267,7 +274,16 @@ fleet cleanup --all <device>
 
 ## Bash Shim
 
-After installation, the `bash` shim intercepts common Agent shell calls:
+`bash` shim 默认**不安装**，要显式开启：
+
+```bash
+fleet install --with-bash-shim   # 装 fleet/rpty 时一并装
+fleet install-shim               # 单独装
+fleet uninstall-shim             # 卸载（拒绝删除非本工具的同名文件）
+fleet doctor                     # 打印 bash shim: installed | not installed
+```
+
+装好之后，`bash` shim 拦截常见的 Agent shell 调用：
 
 ```bash
 bash -lc '<cmd>'
@@ -277,7 +293,8 @@ bash -c '<cmd>'
 路由是**按会话显式开启**的：没跑过 `fleet use <device>` 时所有调用都在本机执行；
 shim 不路由的形态（脚本路径、交互式 shell）同样回落 `/bin/bash`。这道闸门是有意的
 ——shim 挂在每个进程的 PATH 上，若拦截无关的 `bash` 调用，会打断
-`#!/usr/bin/env bash` 脚本：git hook、pre-commit、凭据 helper 都靠它。
+`#!/usr/bin/env bash` 脚本：git hook、pre-commit、凭据 helper 都靠它。安装期默认不建
+这个链接，是同一考虑的更进一步：没 opt-in 的机器根本不产生全局拦截。
 
 设 `RPTY_BASH_PASSTHROUGH=1` 可在已路由状态下强制走本机 bash。
 

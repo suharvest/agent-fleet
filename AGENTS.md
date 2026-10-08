@@ -196,6 +196,12 @@ unless the user explicitly asks for a shared shell.
 
 ## Bash Shim
 
+The `bash` shim is opt-in. `install` and `doctor --fix` leave it out unless
+`--with-bash-shim` is passed; `install-shim` adds it alone and
+`uninstall-shim` removes it. `doctor` prints `bash shim: installed` or
+`bash shim: not installed`, and `uninstall-shim` refuses to remove a file that
+is not the Fleet shim.
+
 When invoked as `bash`, the binary intercepts common Agent calls:
 
 ```bash
