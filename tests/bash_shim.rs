@@ -1,11 +1,13 @@
 //! The installed runtime answers to `bash`, so every bin target must keep the
 //! shim's passthrough.
 //!
-//! `install` copies one binary and symlinks `rpty`, `fleet` and `bash` at it.
-//! The `fleet` bin used to call the subcommand parser directly, so invoking it
-//! as `bash` produced `unknown or unimplemented command: -c` — which broke
-//! every `#!/usr/bin/env bash` script (git hooks, pre-commit, credential
-//! helpers) on a machine with the shim dir on PATH.
+//! `install` copies one binary and symlinks every command name at it. The bash
+//! link is opt-in: `install` and `doctor --fix` skip it unless
+//! `--with-bash-shim` is passed, and `install-shim` / `uninstall-shim` toggle
+//! it on its own. The `fleet` bin used to call the subcommand parser directly,
+//! so invoking it as `bash` produced `unknown or unimplemented command: -c` —
+//! which broke every `#!/usr/bin/env bash` script (git hooks, pre-commit,
+//! credential helpers) on a machine with the shim dir on PATH.
 //!
 //! Unix-only: passthrough execs `/bin/bash`, and the Windows shim is a `.cmd`
 //! wrapper that passes the name through `RPTY_ARGV0` rather than a symlink.
@@ -59,6 +61,135 @@ impl Shim {
         std::fs::create_dir_all(&dir).expect("create session dir");
         std::fs::write(dir.join("current_host"), host).expect("write current_host");
     }
+}
+
+/// A scratch install dir that is removed on drop.
+struct ScratchDir(PathBuf);
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> ScratchDir {
+    let dir = std::env::temp_dir().join(format!("rpty-install-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    ScratchDir(dir)
+}
+
+fn exists(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Run the `rpty` bin with `args`, isolating RPTY_HOME so nothing touches the
+/// real install.
+fn rpty(args: &[&str]) -> std::process::Output {
+    let home = std::env::temp_dir().join("rpty-install-rpty-home");
+    Command::new(env!("CARGO_BIN_EXE_rpty"))
+        .args(args)
+        .env("RPTY_HOME", home)
+        .env_remove("RPTY_ARGV0")
+        .output()
+        .expect("run rpty")
+}
+
+#[test]
+fn install_skips_the_bash_shim_by_default() {
+    let dir = scratch("default");
+    let out = rpty(&["install", dir.0.to_str().expect("utf8 path")]);
+    assert!(
+        out.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(exists(&dir.0.join("rpty")), "rpty shim must be installed");
+    assert!(exists(&dir.0.join("fleet")), "fleet shim must be installed");
+    assert!(
+        !exists(&dir.0.join("bash")),
+        "bash shim must NOT be installed by default"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("bash shim: not installed"),
+        "install output must state the bash shim is off"
+    );
+}
+
+#[test]
+fn install_with_bash_shim_flag_creates_it() {
+    let dir = scratch("with-flag");
+    let out = rpty(&[
+        "install",
+        "--with-bash-shim",
+        dir.0.to_str().expect("utf8 path"),
+    ]);
+    assert!(
+        out.status.success(),
+        "install --with-bash-shim failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        exists(&dir.0.join("bash")),
+        "--with-bash-shim must create the bash link"
+    );
+}
+
+#[test]
+fn install_shim_still_creates_the_bash_link() {
+    let dir = scratch("install-shim");
+    let out = rpty(&["install-shim", dir.0.to_str().expect("utf8 path")]);
+    assert!(
+        out.status.success(),
+        "install-shim failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        exists(&dir.0.join("bash")),
+        "install-shim keeps its explicit opt-in semantics"
+    );
+}
+
+#[test]
+fn uninstall_shim_removes_the_bash_link() {
+    let dir = scratch("uninstall");
+    let path = dir.0.to_str().expect("utf8 path").to_string();
+    assert!(rpty(&["install-shim", &path]).status.success());
+    assert!(exists(&dir.0.join("bash")));
+
+    let out = rpty(&["uninstall-shim", &path]);
+    assert!(
+        out.status.success(),
+        "uninstall-shim failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !exists(&dir.0.join("bash")),
+        "uninstall-shim must remove the bash link"
+    );
+
+    // Idempotent: a second run reports there was nothing to do and succeeds.
+    let again = rpty(&["uninstall-shim", &path]);
+    assert!(again.status.success());
+    assert!(String::from_utf8_lossy(&again.stdout).contains("not installed"));
+}
+
+#[test]
+fn uninstall_shim_refuses_a_real_bash_file() {
+    let dir = scratch("refuse");
+    let real = dir.0.join("bash");
+    std::fs::write(&real, "#!/bin/sh\necho i-am-real-bash\n").expect("write real file");
+
+    let out = rpty(&["uninstall-shim", dir.0.to_str().expect("utf8 path")]);
+    assert!(
+        !out.status.success(),
+        "uninstall-shim must fail on a non-shim file"
+    );
+    assert!(exists(&real), "a real bash file must not be removed");
+    assert_eq!(
+        std::fs::read_to_string(&real).expect("read back"),
+        "#!/bin/sh\necho i-am-real-bash\n"
+    );
 }
 
 fn assert_passthrough(exe: &str, tag: &str) {

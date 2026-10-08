@@ -49,6 +49,7 @@ where
         [cmd, rest @ ..] if cmd == "cleanup" => cleanup(rest),
         [cmd, rest @ ..] if cmd == "install" => install(rest),
         [cmd, rest @ ..] if cmd == "install-shim" => install_shim(rest),
+        [cmd, rest @ ..] if cmd == "uninstall-shim" => uninstall_shim(rest),
         [cmd, rest @ ..] if cmd == "install-agent-shim" => install_agent_shim(rest),
         [cmd, rest @ ..] if cmd == "fleet" => FleetCommand::discover()
             .passthrough(rest.iter())
@@ -95,14 +96,18 @@ Usage:
   {bin} where
   {bin} shell
   {bin} agent <cmd> [args...]
-  {bin} install [dir]
-  {bin} install-shim [dir]
+  {bin} install [--with-bash-shim] [dir]
+  {bin} install-shim [dir]          # opt in to the bash shim
+  {bin} uninstall-shim [dir]        # remove the bash shim
   {bin} install-agent-shim <agent> [dir]
   {bin} cleanup [--all] [device]
   {bin} attach [device]
-  {bin} doctor [--fix] [--write-shell-profile] [device]
+  {bin} doctor [--fix] [--write-shell-profile] [--with-bash-shim] [device]
   {bin} config [--fleet-py <path>] [--fleet-hub <path>] [--agent <name>]
   {bin} version
+
+The bash shim is opt-in. `install` and `doctor --fix` do not create it unless
+`--with-bash-shim` is passed; `install-shim` / `uninstall-shim` toggle it alone.
 
 Existing Fleet commands are passed through. New shell/agent/run modes use the
 persistent PTY router."
@@ -463,22 +468,105 @@ fn install_shim(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn install(args: &[String]) -> Result<ExitCode, String> {
+/// Remove the bash shim. Refuses to touch anything that is not the Fleet shim,
+/// so a real `/usr/bin/bash`-style file is never deleted by mistake.
+fn uninstall_shim(args: &[String]) -> Result<ExitCode, String> {
     let dir = if let Some(dir) = args.first() {
         std::path::PathBuf::from(dir)
     } else {
         crate::paths::rpty_home().join("bin")
     };
+    let shim = command_shim_path(&dir, "bash");
+    if !is_bash_shim(&shim, &dir)? {
+        println!(
+            "bash shim not installed: {} (nothing to remove)",
+            shim.display()
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    std::fs::remove_file(&shim)
+        .map_err(|err| format!("failed to remove {}: {err}", shim.display()))?;
+    println!("Removed bash shim: {}", shim.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// True when `path` is the Fleet bash shim. `Ok(false)` means "no shim here".
+/// `Err` means a file exists but is not ours, so callers must not delete it.
+fn is_bash_shim(path: &Path, dir: &Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("failed to inspect {}: {err}", path.display())),
+        Ok(meta) if meta.file_type().is_symlink() => {
+            let target = std::fs::read_link(path)
+                .map_err(|err| format!("failed to read link {}: {err}", path.display()))?;
+            let runtime = dir.join(runtime_binary_name());
+            let points_at_runtime = target == runtime
+                || target.file_name() == Some(std::ffi::OsStr::new(runtime_binary_name()));
+            if !points_at_runtime {
+                return Err(format!(
+                    "{} is a symlink to {}, not to the Fleet runtime ({}); refusing to remove",
+                    path.display(),
+                    target.display(),
+                    runtime.display()
+                ));
+            }
+            Ok(true)
+        }
+        Ok(_) => match std::fs::read_to_string(path) {
+            Ok(content) if is_agentfleet_command_shim(&content) => Ok(true),
+            _ => Err(format!(
+                "{} exists and is not a Fleet command shim; refusing to remove",
+                path.display()
+            )),
+        },
+    }
+}
+
+/// Parse `[--with-bash-shim] [dir]` shared by `install` and `doctor`.
+fn parse_install_args(args: &[String]) -> Result<(Option<PathBuf>, bool), String> {
+    let mut with_bash_shim = false;
+    let mut dir = None;
+    for arg in args {
+        match arg.as_str() {
+            "--with-bash-shim" => with_bash_shim = true,
+            value if value.starts_with('-') => {
+                return Err(format!(
+                    "unknown option: {value}. Usage: rpty install [--with-bash-shim] [dir]"
+                ));
+            }
+            value => {
+                if dir.replace(PathBuf::from(value)).is_some() {
+                    return Err("install accepts at most one directory".to_string());
+                }
+            }
+        }
+    }
+    Ok((dir, with_bash_shim))
+}
+
+fn install(args: &[String]) -> Result<ExitCode, String> {
+    let (dir_arg, with_bash_shim) = parse_install_args(args)?;
+    let dir = dir_arg.unwrap_or_else(|| crate::paths::rpty_home().join("bin"));
     let runtime = install_runtime_binary(&dir)?;
     install_link(&dir, "rpty", &runtime)?;
     install_link(&dir, "fleet", &runtime)?;
-    install_link(&dir, "bash", &runtime)?;
+    if with_bash_shim {
+        install_link(&dir, "bash", &runtime)?;
+    }
 
     println!("Installed:");
     println!("  {}", runtime.display());
     println!("  {}", command_shim_path(&dir, "rpty").display());
     println!("  {}", command_shim_path(&dir, "fleet").display());
-    println!("  {}", command_shim_path(&dir, "bash").display());
+    if with_bash_shim {
+        println!(
+            "  {} (bash shim)",
+            command_shim_path(&dir, "bash").display()
+        );
+    } else {
+        println!("bash shim: not installed (off by default). Enable with:");
+        println!("  rpty install-shim   # or: rpty install --with-bash-shim");
+    }
     println!("Add this to PATH before launching an Agent:");
     println!("  export PATH=\"{}:$PATH\"", dir.display());
     Ok(ExitCode::SUCCESS)
@@ -819,15 +907,18 @@ fn cleanup(args: &[String]) -> Result<ExitCode, String> {
 fn doctor(args: &[String]) -> Result<ExitCode, String> {
     let mut fix = false;
     let mut write_shell_profile = false;
+    let mut with_bash_shim = false;
     let mut device = None;
     for arg in args {
         match arg.as_str() {
             "--fix" => fix = true,
             "--write-shell-profile" => write_shell_profile = true,
+            "--with-bash-shim" => with_bash_shim = true,
             value if device.is_none() => device = Some(value),
             _ => {
                 return Err(
-                    "usage: rpty doctor [--fix] [--write-shell-profile] [device]".to_string(),
+                    "usage: rpty doctor [--fix] [--write-shell-profile] [--with-bash-shim] [device]"
+                        .to_string(),
                 );
             }
         }
@@ -840,24 +931,29 @@ fn doctor(args: &[String]) -> Result<ExitCode, String> {
             Router::new().doctor_device(device, fix)?;
         }
         None => {
-            doctor_local(fix, write_shell_profile)?;
+            doctor_local(fix, write_shell_profile, with_bash_shim)?;
         }
     }
     Ok(ExitCode::SUCCESS)
 }
 
-fn doctor_local(fix: bool, write_shell_profile: bool) -> Result<(), String> {
+fn doctor_local(fix: bool, write_shell_profile: bool, with_bash_shim: bool) -> Result<(), String> {
     let dir = crate::paths::rpty_home().join("bin");
     println!("Install dir: {}", dir.display());
     println!("PATH contains install dir: {}", path_contains_dir(&dir));
 
     if fix {
-        install_base_shims(&dir)?;
+        install_base_shims(&dir, with_bash_shim)?;
         if write_shell_profile {
             let profile = write_shell_profile_path(&dir)?;
             println!("Updated shell profile: {}", profile.display());
         }
     }
+
+    // Status is reported after any --fix run so it reflects what is on disk now.
+    // --fix never removes an existing bash shim: removal is explicit
+    // (`rpty uninstall-shim`).
+    print_bash_shim_status(&dir);
 
     print_device_inventory_hint(&dir);
 
@@ -926,17 +1022,50 @@ fn print_device_inventory_hint(dir: &Path) {
     }
 }
 
-fn install_base_shims(dir: &Path) -> Result<(), String> {
+fn print_bash_shim_status(dir: &Path) {
+    let shim = command_shim_path(dir, "bash");
+    let runtime = dir.join(runtime_binary_name());
+    if bash_shim_installed(dir) {
+        println!(
+            "bash shim: installed ({} -> {})",
+            shim.display(),
+            runtime.display()
+        );
+    } else {
+        println!("bash shim: not installed (opt-in: rpty install-shim)");
+    }
+}
+
+fn bash_shim_installed(dir: &Path) -> bool {
+    let shim = command_shim_path(dir, "bash");
+    if let Ok(meta) = std::fs::symlink_metadata(&shim) {
+        if meta.file_type().is_symlink() {
+            return true;
+        }
+    }
+    std::fs::read_to_string(&shim)
+        .map(|content| is_agentfleet_command_shim(&content))
+        .unwrap_or(false)
+}
+
+fn install_base_shims(dir: &Path, with_bash_shim: bool) -> Result<(), String> {
     let runtime = install_runtime_binary(dir)?;
     install_bundled_backend(dir)?;
     install_link(dir, "rpty", &runtime)?;
     install_link(dir, "fleet", &runtime)?;
-    install_link(dir, "bash", &runtime)?;
+    if with_bash_shim {
+        install_link(dir, "bash", &runtime)?;
+    }
     println!("Installed base shims:");
     println!("  {}", runtime.display());
     println!("  {}", dir.join("fleet").display());
     println!("  {}", dir.join("rpty").display());
-    println!("  {}", dir.join("bash").display());
+    if with_bash_shim {
+        println!("  {}", dir.join("bash").display());
+        println!("bash shim: installed (opt-in)");
+    } else {
+        println!("bash shim: not installed (opt-in: rpty install-shim)");
+    }
     println!("  {}", dir.join("fleet_backend").display());
     Ok(())
 }
