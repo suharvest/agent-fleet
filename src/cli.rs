@@ -1084,10 +1084,24 @@ fn install_bundled_backend(dir: &Path) -> Result<(), String> {
         "devices.example.json",
     ] {
         let src = source.join(name);
-        if src.exists() {
-            std::fs::copy(&src, dest.join(name))
-                .map_err(|err| format!("failed to install {}: {err}", src.display()))?;
+        let target = dest.join(name);
+        if !src.exists() {
+            continue;
         }
+        // `bundled_backend_source` prefers the running binary's own directory,
+        // so an install run from `~/.rpty/bin/fleet-router` resolves src to the
+        // very file it is about to write — `fs::copy` truncates the destination
+        // before reading it, which zeroes the bundled backend on every
+        // reinstall. Same file: nothing to copy.
+        let same_file = std::fs::canonicalize(&src)
+            .ok()
+            .zip(std::fs::canonicalize(&target).ok())
+            .is_some_and(|(src, target)| src == target);
+        if same_file {
+            continue;
+        }
+        std::fs::copy(&src, &target)
+            .map_err(|err| format!("failed to install {}: {err}", src.display()))?;
     }
     Ok(())
 }
